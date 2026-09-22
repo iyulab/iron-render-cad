@@ -3,6 +3,7 @@
 
 use super::format::{clean, neg};
 use super::Ctx;
+use crate::color::{tint_toward_white, true_color_to_hex, DEFAULT_COLOR};
 use std::fmt::Write as _;
 use uncad_model::model::{
     HatchBoundaryPath, HatchEdge, HatchEntity, HatchGradient, HatchPatternLine, Point2D,
@@ -238,11 +239,19 @@ fn render_pattern_line(
 /// case ignores `angle` -- a center-out gradient has no meaningful rotation.
 fn render_gradient(g: &HatchGradient, path_d: &str, ctx: &mut Ctx) -> String {
     let id = ctx.next_def_id("hg");
+    // The model carries the stops as the file states them (packed RGB, and
+    // the tint of a single-color gradient); the hex form, the white-on-white
+    // flip and the fade toward white are this renderer's derivations.
+    let color1 = true_color_to_hex(Some(g.color1)).unwrap_or_else(|| DEFAULT_COLOR.to_string());
+    let color2 = match g.color2 {
+        Some(c) => true_color_to_hex(Some(c)).unwrap_or_else(|| DEFAULT_COLOR.to_string()),
+        None => tint_toward_white(&color1, g.tint),
+    };
     let def = if g.is_radial {
         format!(
             "<radialGradient id=\"{id}\" gradientUnits=\"objectBoundingBox\" cx=\"0.5\" cy=\"0.5\" r=\"0.5\">\n    \
              <stop offset=\"0%\" stop-color=\"{}\"/>\n    <stop offset=\"100%\" stop-color=\"{}\"/>\n  </radialGradient>",
-            g.color1, g.color2
+            color1, color2
         )
     } else {
         let deg = neg(g.angle.to_degrees());
@@ -250,7 +259,7 @@ fn render_gradient(g: &HatchGradient, path_d: &str, ctx: &mut Ctx) -> String {
             "<linearGradient id=\"{id}\" gradientUnits=\"objectBoundingBox\" x1=\"0\" y1=\"0.5\" x2=\"1\" y2=\"0.5\" \
              gradientTransform=\"rotate({deg} 0.5 0.5)\">\n    \
              <stop offset=\"0%\" stop-color=\"{}\"/>\n    <stop offset=\"100%\" stop-color=\"{}\"/>\n  </linearGradient>",
-            g.color1, g.color2
+            color1, color2
         )
     };
     ctx.defs.push(def);

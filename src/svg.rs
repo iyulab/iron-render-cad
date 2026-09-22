@@ -28,7 +28,7 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{Entity, EntityCommon, EntityId, MLineVertex, Point2D, Point3D};
 use uncad_model::tables::Tables;
-use uncad_model::CadDatabase;
+use uncad_model::{Affine2, CadDatabase};
 
 /// Which of a drawing's spaces to render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,59 +77,11 @@ pub struct ToSvgResult {
 
 // --- block transform ---------------------------------------------------
 
-/// An INSERT-style placement, composed across nested block references.
-#[derive(Debug, Clone, Copy)]
-struct Transform {
-    insertion_point: Point2D,
-    x_scale: f64,
-    y_scale: f64,
-    rotation: f64,
-}
-
-impl Transform {
-    fn identity() -> Self {
-        Transform {
-            insertion_point: Point2D { x: 0.0, y: 0.0 },
-            x_scale: 1.0,
-            y_scale: 1.0,
-            rotation: 0.0,
-        }
-    }
-
-    /// Local (x, y) -> world (x, y) through this transform.
-    fn apply(&self, x: f64, y: f64) -> (f64, f64) {
-        let (cos, sin) = (self.rotation.cos(), self.rotation.sin());
-        (
-            self.insertion_point.x + self.x_scale * cos * x - self.y_scale * sin * y,
-            self.insertion_point.y + self.x_scale * sin * x + self.y_scale * cos * y,
-        )
-    }
-
-    /// The SVG `matrix(a b c d e f)` equivalent, composed with the renderer's
-    /// CAD-y-up to SVG-y-down flip.
-    fn svg_matrix(&self) -> [f64; 6] {
-        let (cos, sin) = (self.rotation.cos(), self.rotation.sin());
-        [
-            self.x_scale * cos,
-            neg(self.x_scale * sin),
-            self.y_scale * sin,
-            self.y_scale * cos,
-            self.insertion_point.x,
-            neg(self.insertion_point.y),
-        ]
-    }
-}
-
-/// Composes a parent world-transform with a child's local transform: applying
-/// the result to a point equals applying `child` then `parent`.
-fn compose(parent: &Transform, child: &Transform) -> Transform {
-    let (px, py) = parent.apply(child.insertion_point.x, child.insertion_point.y);
-    Transform {
-        insertion_point: Point2D { x: px, y: py },
-        x_scale: parent.x_scale * child.x_scale,
-        y_scale: parent.y_scale * child.y_scale,
-        rotation: parent.rotation + child.rotation,
-    }
+/// The SVG `matrix(a b c d e f)` of a placement, composed with the
+/// renderer's CAD-y-up to SVG-y-down flip: conjugating the map by the flip
+/// negates the two off-diagonal entries and the y translation.
+fn svg_matrix(t: &Affine2) -> [f64; 6] {
+    [t.a, neg(t.b), neg(t.c), t.d, t.e, neg(t.f)]
 }
 
 // --- render context ----------------------------------------------------
@@ -160,7 +112,9 @@ struct Ctx<'a> {
     depth: u32,
     scale: f64,
     inherited_color: String,
-    transform: Transform,
+    /// Local (inside the block being rendered) -> world, composed across
+    /// nested block references through the model's placement arithmetic.
+    transform: Affine2,
     /// `<defs>` entries accumulated by HATCH rendering, emitted once into a
     /// top-level `<defs>` by [`to_svg`]. Persists across `render_block_ref`'s
     /// transform save/restore, since a HATCH can appear inside a block too.
@@ -189,7 +143,7 @@ impl<'a> Ctx<'a> {
             depth: 0,
             scale: 1.0,
             inherited_color: DEFAULT_COLOR.to_string(),
-            transform: Transform::identity(),
+            transform: Affine2::IDENTITY,
             defs: Vec::new(),
             next_def_id: 0,
             block_ref_budget: BLOCK_REF_BUDGET,
@@ -223,7 +177,10 @@ impl<'a> Ctx<'a> {
     /// `partial_cmp(..).unwrap()` calls in [`bounds`] instead of just rendering
     /// a degenerate point.
     fn consider(&mut self, local_x: f64, local_y: f64) {
-        let (x, y) = self.transform.apply(local_x, local_y);
+        let Point2D { x, y } = self.transform.apply(Point2D {
+            x: local_x,
+            y: local_y,
+        });
         if !x.is_finite() || !y.is_finite() {
             return;
         }
@@ -445,21 +402,16 @@ fn render_block_ref(
         ctx.scale
     };
 
-    let child_transform = Transform {
-        insertion_point,
-        x_scale,
-        y_scale,
-        rotation,
-    };
+    let child_transform = Affine2::placement(insertion_point, x_scale, y_scale, rotation);
     // Compose: local (within the block) -> world, via this block's own
-    // transform evaluated in the parent's already-established space. The
+    // placement followed by the parent's already-established one. The
     // parent's own state is restored afterwards.
     let parent_transform = ctx.transform;
     let parent_depth = ctx.depth;
     let parent_scale = ctx.scale;
     let parent_inherited = std::mem::replace(&mut ctx.inherited_color, color.to_string());
 
-    ctx.transform = compose(&parent_transform, &child_transform);
+    ctx.transform = child_transform.then(&parent_transform);
     ctx.depth = parent_depth + 1;
     ctx.scale = cumulative_scale;
 
@@ -486,7 +438,7 @@ fn render_block_ref(
     // The parent transform is baked into ctx.transform for *bounds* purposes
     // (world-space consider()), but the emitted matrix is only this block's own
     // local transform -- nesting is expressed by nested <g> elements.
-    let [a, b, c, d, e, f] = child_transform.svg_matrix();
+    let [a, b, c, d, e, f] = svg_matrix(&child_transform);
     format!(
         "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\" stroke-width=\"{}\">\n  {}\n</g>",
         stroke_width_placeholder(cumulative_scale),
@@ -1116,44 +1068,41 @@ mod tests {
     }
 
     #[test]
-    fn transform_identity_apply_is_a_no_op() {
-        let (x, y) = Transform::identity().apply(3.0, 4.0);
-        close(x, 3.0);
-        close(y, 4.0);
+    fn a_placement_scales_rotates_then_translates_through_the_models_map() {
+        let t = Affine2::placement(Point2D { x: 10.0, y: 20.0 }, 2.0, 2.0, 0.0);
+        let p = t.apply(Point2D { x: 1.0, y: 1.0 });
+        close(p.x, 12.0);
+        close(p.y, 22.0);
     }
 
     #[test]
-    fn transform_apply_scales_rotates_then_translates() {
-        let t = Transform {
-            insertion_point: Point2D { x: 10.0, y: 20.0 },
-            x_scale: 2.0,
-            y_scale: 2.0,
-            rotation: 0.0,
-        };
-        let (x, y) = t.apply(1.0, 1.0);
-        close(x, 12.0);
-        close(y, 22.0);
+    fn a_child_placement_composes_within_its_parents_space() {
+        let parent = Affine2::placement(Point2D { x: 10.0, y: 0.0 }, 1.0, 1.0, 0.0);
+        let child = Affine2::placement(Point2D { x: 1.0, y: 1.0 }, 2.0, 2.0, 0.0);
+        let composed = child.then(&parent);
+        close(composed.e, 11.0);
+        close(composed.f, 1.0);
+        close(composed.a, 2.0);
+        close(composed.d, 2.0);
+        let p = composed.apply(Point2D { x: 1.0, y: 0.0 });
+        close(p.x, 13.0);
+        close(p.y, 1.0);
     }
 
     #[test]
-    fn compose_applies_child_transform_within_parents_space() {
-        let parent = Transform {
-            insertion_point: Point2D { x: 10.0, y: 0.0 },
-            x_scale: 1.0,
-            y_scale: 1.0,
-            rotation: 0.0,
-        };
-        let child = Transform {
-            insertion_point: Point2D { x: 1.0, y: 1.0 },
-            x_scale: 2.0,
-            y_scale: 2.0,
-            rotation: 0.0,
-        };
-        let composed = compose(&parent, &child);
-        close(composed.insertion_point.x, 11.0);
-        close(composed.insertion_point.y, 1.0);
-        close(composed.x_scale, 2.0);
-        close(composed.y_scale, 2.0);
+    fn the_svg_matrix_is_the_placement_conjugated_by_the_y_flip() {
+        // A quarter turn, scale 2, at (10, 20): in CAD space local (1, 0)
+        // goes to (10, 22); in SVG space y is down, so it goes to (10, -22).
+        let t = Affine2::placement(
+            Point2D { x: 10.0, y: 20.0 },
+            2.0,
+            2.0,
+            std::f64::consts::FRAC_PI_2,
+        );
+        let [a, b, c, d, e, f] = svg_matrix(&t);
+        let (x, y) = (a * 1.0 + c * 0.0 + e, b * 1.0 + d * 0.0 + f);
+        close(x, 10.0);
+        close(y, -22.0);
     }
 
     #[test]

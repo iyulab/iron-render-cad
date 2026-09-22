@@ -1,0 +1,38 @@
+[package]
+name = "iron-render-cad"
+version = "0.1.0"
+edition = "2021"
+# Minimum supported Rust version. Measured, not guessed, and checked by CI's
+# `msrv` job with exactly this toolchain -- raise the two together.
+rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/iyulab/iron-render-cad"
+homepage = "https://github.com/iyulab/iron-render-cad"
+readme = "README.md"
+description = "Deterministic SVG/PNG rendering of the uncad-model entity model. Reports what it cannot draw instead of approximating in silence."
+keywords = ["cad", "svg", "png", "render", "dxf"]
+categories = ["graphics", "rendering"]
+
+[lints.rust]
+# A renderer of plain data: there is no reason for `unsafe` here, and
+# forbidding it keeps a native binding from ever creeping in.
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Same input, same bytes: nothing this crate outputs may depend on a hash
+# collection's iteration order, which `std` randomizes per instance. The main
+# guard is clippy.toml's `disallowed-types`; this restriction lint additionally
+# covers `for` loops over any other hash-based type.
+iter_over_hash_type = "warn"
+
+[dependencies]
+# The model this crate draws. A version dependency, never a path: this crate
+# must build from a standalone checkout.
+uncad-model = "0.1.0"
+regex = "1"
+# SVG -> PNG. One crate rather than separate usvg / tiny-skia / fontdb: resvg
+# re-exports all three, which keeps them in lock step.
+resvg = "0.48"
+
+[dev-dependencies]
+serde_json = "1.0.151"

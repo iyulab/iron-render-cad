@@ -21,7 +21,16 @@ Input is expressed in the [uncad-model](https://github.com/iyulab/uncad-model) e
 
 ## Status
 
-Pre-implementation. No code yet. The design principles are settled and documented in [docs/principles.md](docs/principles.md); read that before proposing anything.
+0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything), report the entity types they could not draw and the block references that drew nothing, and are deterministic byte for byte. The overlay (change set on top of the original) is not built yet. The design principles are in [docs/principles.md](docs/principles.md); what is approximated and what is unverified is in [docs/CAVEATS.md](docs/CAVEATS.md). Read both before proposing anything.
+
+```rust
+let db: uncad_model::CadDatabase = /* from a parser, or from its JSON */;
+let svg = iron_render_cad::to_svg(&db, iron_render_cad::ToSvgOptions::default());
+std::fs::write("drawing.svg", svg.svg)?;
+println!("not drawn: {:?}", svg.unsupported_types);
+let png = iron_render_cad::to_png(&db, iron_render_cad::ToPngOptions::default())?;
+std::fs::write("drawing.png", png.png)?;
+```
 
 ## License
 

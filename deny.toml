@@ -1,0 +1,36 @@
+# cargo-deny -- license gate for the Rust dependency graph.
+#
+# This crate is MIT. What must NOT happen is a copyleft component arriving
+# through a dependency -- the resvg / usvg / tiny-skia / fontdb tree is large
+# and is the one to watch -- because a renderer that carries a license
+# obligation stops being something every consumer can link.
+#
+# Run locally: cargo deny check licenses sources
+
+[licenses]
+# Permissive only. Every entry below was observed in the current graph; this
+# is not a speculative allowlist. A new license appearing here is a decision,
+# not a line to append when a build fails.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "0BSD",
+]
+# Deliberately absent: MPL-2.0, EPL, CDDL and the LGPLs. They are weak
+# copyleft, not permissive.
+
+[bans]
+multiple-versions = "warn"
+
+[advisories]
+
+[sources]
+# crates.io only. A git or alternate-registry dependency would bypass the
+# license review above, since its license field is whatever the source says.
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -582,6 +582,8 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 [[package]]
 name = "uncad-model"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e509af2061bee7a4db6d461ec7727200b25dc36edf424ed334d2d4aace5c0bd5"
 dependencies = [
  "serde",
  "serde_json",

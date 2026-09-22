@@ -21,7 +21,9 @@ Input is expressed in the [uncad-model](https://github.com/iyulab/uncad-model) e
 
 ## Status
 
-0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything), report the entity types they could not draw and the block references that drew nothing, and are deterministic byte for byte. The overlay (change set on top of the original) is not built yet. The design principles are in [docs/principles.md](docs/principles.md); what is approximated and what is unverified is in [docs/CAVEATS.md](docs/CAVEATS.md). Read both before proposing anything.
+0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything), report the entity types they could not draw and the block references that drew nothing, and are deterministic byte for byte. The overlay (change set on top of the original) is not implemented yet. The design principles are
+in [docs/principles.md](docs/principles.md); what is approximated and what is unverified is in
+[docs/CAVEATS.md](docs/CAVEATS.md).
 
 ```rust
 let db: uncad_model::CadDatabase = /* from a parser, or from its JSON */;

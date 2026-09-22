@@ -8,6 +8,10 @@
 # Run locally: cargo deny check licenses sources
 
 [licenses]
+# Development dependencies are license-checked too: this check has its own
+# switch for them, and it defaults to off. Nothing distributed contains them,
+# but they are still dependencies this repository chose.
+include-dev = true
 # Permissive only. Every entry below was observed in the current graph; this
 # is not a speculative allowlist. A new license appearing here is a decision,
 # not a line to append when a build fails.

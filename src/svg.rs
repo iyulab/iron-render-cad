@@ -395,13 +395,6 @@ fn render_block_ref(
     }
     ctx.block_ref_budget -= 1;
 
-    let raw_scale = ctx.scale * (x_scale * y_scale).abs().sqrt();
-    let cumulative_scale = if raw_scale.is_finite() && raw_scale > 0.0 {
-        raw_scale
-    } else {
-        ctx.scale
-    };
-
     let child_transform = Affine2::placement(insertion_point, x_scale, y_scale, rotation);
     // Compose: local (within the block) -> world, via this block's own
     // placement followed by the parent's already-established one. The
@@ -412,6 +405,18 @@ fn render_block_ref(
     let parent_inherited = std::mem::replace(&mut ctx.inherited_color, color.to_string());
 
     ctx.transform = child_transform.then(&parent_transform);
+    // How much this block's contents are scaled, for stroke widths: the
+    // area scale of the composed placement. Derived from the placement
+    // itself rather than tracked beside it, so the two cannot drift; for a
+    // chain of placements this is the same number multiplying each level's
+    // `sqrt(|sx * sy|)` gave. A degenerate placement (a zero or infinite
+    // scale factor) keeps the parent's.
+    let area_scale = ctx.transform.determinant().abs().sqrt();
+    let cumulative_scale = if area_scale.is_finite() && area_scale > 0.0 {
+        area_scale
+    } else {
+        parent_scale
+    };
     ctx.depth = parent_depth + 1;
     ctx.scale = cumulative_scale;
 
@@ -1087,6 +1092,23 @@ mod tests {
         let p = composed.apply(Point2D { x: 1.0, y: 0.0 });
         close(p.x, 13.0);
         close(p.y, 1.0);
+    }
+
+    #[test]
+    fn the_area_scale_of_a_composed_placement_is_the_product_of_each_levels() {
+        // What stroke widths are divided by: the same number the old
+        // per-level `sqrt(|sx * sy|)` product gave, now read off the
+        // composed placement so the two cannot drift.
+        let a = Affine2::placement(Point2D { x: 3.0, y: 0.0 }, 2.0, 2.0, 0.7);
+        let b = Affine2::placement(Point2D { x: 1.0, y: 1.0 }, 1.5, 4.0, -0.2);
+        let composed = b.then(&a);
+        close(
+            composed.determinant().abs().sqrt(),
+            (2.0f64 * 2.0).abs().sqrt() * (1.5f64 * 4.0).abs().sqrt(),
+        );
+        // A mirrored placement scales by the same amount it would unmirrored.
+        let m = Affine2::placement(Point2D { x: 0.0, y: 0.0 }, -3.0, 3.0, 0.0);
+        close(m.determinant().abs().sqrt(), 3.0);
     }
 
     #[test]

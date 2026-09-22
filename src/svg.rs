@@ -559,7 +559,10 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                     x: t.insertion_point.x,
                     y: t.insertion_point.y,
                 },
-                t.text_height,
+                // A frame whose file never stated a height still has to be
+                // drawn at some size; this is the renderer's choice, which
+                // is why the model does not make it.
+                t.text_height.unwrap_or(1.0),
                 0.0,
                 &color,
                 &t.text_value,

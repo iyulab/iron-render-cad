@@ -18,8 +18,11 @@ useful than a gap -- but a reader should know which parts are approximate:
   neither the viewport's contents nor the wipeout's masking are rendered.
 - **TOLERANCE as plain text**: the feature-control-frame string is drawn as text, with its
   symbol escapes unstripped.
-- **LIGHT as a marker**: a small marker at the position, a dashed line to the target when
-  the light aims somewhere.
+- **LIGHT as a marker**: a small marker at the position, and a dashed line to the target
+  for a distant or spot light. A light whose file does not state its kind gets the marker
+  alone.
+- **LEADER arrowheads only where the file states one**: a leader whose file omits the
+  arrowhead flag is drawn without an arrowhead.
 - **MTEXT formatting codes are stripped**, not interpreted: the text is drawn plain.
 
 What the renderer cannot draw at all (a type the model has no shape for arrives as

@@ -26,7 +26,9 @@ use bounds::{dominant_cluster_box, Box2D};
 use format::{escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use uncad_model::model::{Entity, EntityCommon, EntityId, MLineVertex, Point2D, Point3D};
+use uncad_model::model::{
+    Entity, EntityCommon, EntityId, LightType, MLineVertex, Point2D, Point3D,
+};
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
 
@@ -755,7 +757,9 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider_all_3d(&l.vertices);
             let pts = xy(&l.vertices);
             let line = polyline_element(&pts, false, &color);
-            let arrow = if l.has_arrowhead && pts.len() >= 2 {
+            // A leader whose file does not state the flag draws none: an
+            // arrowhead is a claim about the drawing, and nothing made it.
+            let arrow = if l.has_arrowhead == Some(true) && pts.len() >= 2 {
                 arrowhead_element(&pts[0], &pts[1], ARROWHEAD_SIZE, &color)
             } else {
                 String::new()
@@ -816,7 +820,12 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 l.position.x,
                 neg(l.position.y)
             );
-            if !l.has_target {
+            // Distant and spot lights aim at their target; a point light,
+            // or a light whose file does not say what kind it is, gets the
+            // marker alone rather than a direction nobody stated.
+            let aims = matches!(l.light_type, Some(LightType::Distant | LightType::Spot))
+                && l.target != l.position;
+            if !aims {
                 return Some(marker);
             }
             ctx.consider(l.target.x, l.target.y);
@@ -1185,5 +1194,88 @@ mod tests {
 
         let pts_negative = mline_offset_points(&verts, -5.0);
         close(pts_negative[0].y, -5.0);
+    }
+
+    fn render_one(entity: Entity) -> String {
+        let db = CadDatabase {
+            entities: vec![entity],
+            tables: Tables::default(),
+            read_diagnostics: Default::default(),
+        };
+        let options = ToSvgOptions {
+            space: Space::All,
+            ..ToSvgOptions::default()
+        };
+        to_svg(&db, options).svg
+    }
+
+    fn plain_common() -> EntityCommon {
+        use uncad_model::model::{Confidence, Origin, Ref};
+        EntityCommon {
+            id: EntityId::new(1),
+            origin: Origin::Vector,
+            confidence: Confidence::High,
+            source_handle: Ref::Absent,
+            layer: Ref::Absent,
+            color_index: 7,
+            true_color: None,
+        }
+    }
+
+    fn leader(has_arrowhead: Option<bool>) -> Entity {
+        use uncad_model::model::{LeaderAnnotation, LeaderEntity, Ref};
+        let p = |x| Point3D { x, y: 0.0, z: 0.0 };
+        Entity::Leader(LeaderEntity {
+            common: plain_common(),
+            vertices: vec![p(0.0), p(10.0)],
+            has_arrowhead,
+            path_type: None,
+            annotation: LeaderAnnotation::Nothing,
+            annotation_id: Ref::Absent,
+            style_name: Ref::Absent,
+        })
+    }
+
+    #[test]
+    fn a_leader_draws_an_arrowhead_only_where_its_file_states_one() {
+        assert!(render_one(leader(Some(true))).contains("<polygon"));
+        assert!(!render_one(leader(Some(false))).contains("<polygon"));
+        assert!(
+            !render_one(leader(None)).contains("<polygon"),
+            "a flag the file did not state is not an arrowhead"
+        );
+    }
+
+    fn light(light_type: Option<LightType>) -> Entity {
+        use uncad_model::model::LightEntity;
+        Entity::Light(LightEntity {
+            common: plain_common(),
+            position: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 10.0,
+            },
+            target: Point3D {
+                x: 5.0,
+                y: 5.0,
+                z: 0.0,
+            },
+            light_type,
+        })
+    }
+
+    #[test]
+    fn only_a_light_the_file_says_aims_gets_a_line_to_its_target() {
+        for aiming in [LightType::Distant, LightType::Spot] {
+            assert!(
+                render_one(light(Some(aiming))).contains("<line"),
+                "{aiming:?}"
+            );
+        }
+        assert!(!render_one(light(Some(LightType::Point))).contains("<line"));
+        assert!(
+            !render_one(light(None)).contains("<line"),
+            "a light of no stated kind is not given a direction"
+        );
     }
 }

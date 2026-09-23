@@ -23,7 +23,6 @@ pub mod color;
 pub mod limits;
 mod png;
 mod svg;
-mod text;
 
 pub use png::{
     layout_to_png, svg_to_png, to_png, Background, Fonts, PngError, PngSize, ToPngOptions,

@@ -10,16 +10,15 @@ Several entity types are drawn as approximations rather than faithfully. Every o
 them is still drawn (not reported as unsupported), because a recognizable picture is more
 useful than a gap -- but a reader should know which parts are approximate:
 
-- **Curves as chords**: curved HATCH edges are drawn as polylines through sampled
-  points. A SPLINE stored by control points is evaluated as the NURBS curve its degree,
+- **Curves as chords**: curved HATCH edges, and the bulged segments of a HATCH polyline
+  boundary, are drawn as polylines through sampled points. A SPLINE stored by control points is evaluated as the NURBS curve its degree,
   knots and weights define, and drawn through 16 points per knot span; a SPLINE stored
   by fit points only is drawn through its fit points. A spline whose knots or weights do
   not add up to a definition is drawn as its control polygon, which does not lie on the
-  curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs; a mirrored ellipse -- normal
-  (0, 0, -1) -- runs the other way. An ELLIPSE on a tilted plane is drawn through 64 points
-  of its outline seen from above. A polyline's bulged segments are exact SVG arcs too, turning
-  the way the bulge's sign says; a bulge so small that its arc's radius reaches 1e15 units is
-  drawn as the straight segment it all but is.)
+  curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs, and so is a bulged segment of an
+  LWPOLYLINE or 2D POLYLINE; a mirrored ellipse -- normal (0, 0, -1) -- runs the other way, and a mirrored CIRCLE, ARC, LWPOLYLINE, 2D POLYLINE, SOLID or TRACE -- written in its own coordinate system, extrusion (0, 0, -1) -- is taken to the world through the format's arbitrary axis algorithm and is still exact (a polyline's arcs then turn the other way). A CIRCLE or ARC on a tilted plane is drawn through 64 points per turn of its outline seen from above, and a polyline on one through its vertices and 12 points per arc segment. An ELLIPSE on a tilted plane is drawn through 64 points
+  of its outline seen from above. A bulge so small that its arc's radius reaches 1e15 units
+  is drawn as the straight segment it all but is.)
 - **Polyline widths are not drawn**: an LWPOLYLINE or POLYLINE_2D is drawn as its centreline
   at the ordinary stroke, whatever its constant or per-vertex widths -- a wide border, a
   tapered arrow and a DONUT's ring all come out as thin lines. The widths are in the model;
@@ -41,11 +40,12 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **LEADER arrowheads only where the file states one**: a leader whose file omits the
   arrowhead flag is drawn without an arrowhead.
 - **Text codes are decoded to what they show, not drawn as formatting**: MTEXT paragraph
-  breaks become lines (a blank paragraph keeps its line), a stacked fraction reads `3 1/2`
-  rather than `31/2`, format codes (font, colour, height, width) are dropped, and the
-  `%%c`/`%%d`/`%%p` symbol codes and `\U+XXXX` escapes in TEXT, ATTRIB and MTEXT become
-  their characters. Everything is drawn in one plain face; underline and overline toggles
-  draw nothing. A TEXT whose file stores height 0 ("the style's height", which the model
+  breaks become lines (a blank paragraph keeps its line), stacked text is drawn inline as
+  `top/bottom` and a stacked fraction reads `3 1/2` rather than `31/2`, format codes (font,
+  colour, height, width) are dropped, and the `%%c`/`%%d`/`%%p` symbol codes and `\U+XXXX`
+  escapes in TEXT, ATTRIB and MTEXT become their characters. A format code that is not closed
+  by its `;`, or one the renderer does not know, is drawn as written. Everything is drawn in
+  one plain face; underline and overline toggles draw nothing. A TEXT whose file stores height 0 ("the style's height", which the model
   does not carry) is drawn at height 1.
 - **What the drawing hides is not drawn**: an entity the drawing marks invisible (a dynamic
   block's hidden visibility states), an attribute whose own invisible flag is set, anything on
@@ -131,8 +131,8 @@ model places a block reference.
   clockwise, a polyline's bulges turn the other way, and a text reads backwards, as a text
   seen from behind does.
 - **Tilted**: seen from above a circle is an ellipse, so a circle or an arc is drawn through
-  64 points of its outline and each arc of a polyline through 16; a text is foreshortened with
-  its plane; a SOLID's corners are exact.
+  64 points per turn of its outline and each arc of a polyline through 12; a text is
+  foreshortened with its plane; a SOLID's corners are exact.
 
 An INSERT is placed by the model's own `Affine2::from_insert`, which applies its extrusion the
 same way. A HATCH is drawn as its boundary is stated: the model carries no extrusion for it,

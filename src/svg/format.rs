@@ -1,7 +1,6 @@
 //! Number and string formatting for the emitted SVG: the CAD-y-up to
 //! SVG-y-down flip, coordinate cleanup and XML escaping. Pure functions, no
-//! renderer state. (Turning a CAD string into the characters it shows is
-//! `crate::text`.)
+//! renderer state.
 
 use std::fmt::Write as _;
 use uncad_model::model::{Point2D, Point3D};

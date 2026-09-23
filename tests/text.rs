@@ -105,7 +105,7 @@ fn dys(svg: &str) -> Vec<f64> {
 
 #[test]
 fn a_texts_symbol_codes_are_drawn_as_their_symbols() {
-    assert!(svg(text("%%c50", 2.5)).contains(">\u{2205}50</text>"));
+    assert!(svg(text("%%c50", 2.5)).contains(">\u{2300}50</text>"));
     assert!(svg(text("108%%d", 2.5)).contains(">108\u{00B0}</text>"));
     assert!(svg(text("%%p0.5", 2.5)).contains(">\u{00B1}0.5</text>"));
     // In a TEXT a backslash is a backslash.

@@ -19,7 +19,7 @@ use iron_render_cad::{
 };
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity, HatchPatternLine,
-    Origin, Point2D, Point3D, RayEntity, Ref,
+    Origin, Point2D, Point3D, PolylineVertex, RayEntity, Ref,
 };
 use uncad_model::CadDatabase;
 
@@ -214,12 +214,16 @@ fn each_viewport_fills_a_hatch_with_its_own_pattern_at_the_sheets_stroke() {
         &mut db,
         Entity::Hatch(HatchEntity {
             common: common(0x500, "LOCKED"),
-            boundary_paths: vec![HatchBoundaryPath::Polyline(vec![
-                square(-10.0, -10.0),
-                square(10.0, -10.0),
-                square(10.0, 10.0),
-                square(-10.0, 10.0),
-            ])],
+            boundary_paths: vec![HatchBoundaryPath::Polyline(
+                [
+                    square(-10.0, -10.0),
+                    square(10.0, -10.0),
+                    square(10.0, 10.0),
+                    square(-10.0, 10.0),
+                ]
+                .map(PolylineVertex::straight)
+                .to_vec(),
+            )],
             solid_fill: false,
             gradient: None,
             pattern_lines: vec![HatchPatternLine {

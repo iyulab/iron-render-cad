@@ -13,7 +13,8 @@ use iron_render_cad::limits::Cap;
 use iron_render_cad::{to_png, to_svg, Space, ToPngOptions, ToSvgOptions};
 use uncad_model::model::{
     CircleEntity, Confidence, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity,
-    HatchPatternLine, InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D, Ref,
+    HatchPatternLine, InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D,
+    PolylineVertex, Ref,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
@@ -245,15 +246,13 @@ fn a_block_fanning_out_below_the_depth_cap_stops_at_the_expansion_budget() {
 
 #[test]
 fn a_polyline_with_more_vertices_than_the_cap_is_left_out_whole() {
-    let vertices: Vec<Point2D> = (0..=100_000)
-        .map(|i| xy(i as f64 * 0.001, (i % 7) as f64))
+    let vertices: Vec<PolylineVertex> = (0..=100_000)
+        .map(|i| PolylineVertex::straight(xy(i as f64 * 0.001, (i % 7) as f64)))
         .collect();
     let huge = Entity::LwPolyline(LwPolylineEntity {
         common: common(0x20),
         vertices,
         closed: false,
-        bulges: Vec::new(),
-        widths: Vec::new(),
         const_width: 0.0,
         elevation: 0.0,
         extrusion: uncad_model::Point3D {
@@ -273,13 +272,13 @@ fn a_polyline_with_more_vertices_than_the_cap_is_left_out_whole() {
     assert!(result.svg.contains("<line "), "the rest is still drawn");
 
     // The same polyline one vertex under the cap is drawn.
-    let vertices: Vec<Point2D> = (0..100_000).map(|i| xy(i as f64, 0.0)).collect();
+    let vertices: Vec<PolylineVertex> = (0..100_000)
+        .map(|i| PolylineVertex::straight(xy(i as f64, 0.0)))
+        .collect();
     let fits = Entity::LwPolyline(LwPolylineEntity {
         common: common(0x20),
         vertices,
         closed: false,
-        bulges: Vec::new(),
-        widths: Vec::new(),
         const_width: 0.0,
         elevation: 0.0,
         extrusion: uncad_model::Point3D {
@@ -294,7 +293,9 @@ fn a_polyline_with_more_vertices_than_the_cap_is_left_out_whole() {
 }
 
 fn hatch(spacing: f64) -> Entity {
-    let square = vec![xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0)];
+    let square = [xy(0.0, 0.0), xy(10.0, 0.0), xy(10.0, 10.0), xy(0.0, 10.0)]
+        .map(PolylineVertex::straight)
+        .to_vec();
     Entity::Hatch(HatchEntity {
         common: common(0x30),
         boundary_paths: vec![HatchBoundaryPath::Polyline(square)],

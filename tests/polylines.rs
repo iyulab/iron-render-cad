@@ -9,7 +9,8 @@
 
 use iron_render_cad::{to_svg, Space, ToSvgOptions, ToSvgResult};
 use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, LwPolylineEntity, Origin, Point2D, Point3D, Ref,
+    Confidence, Entity, EntityCommon, EntityId, LwPolylineEntity, Origin, Point2D, Point3D,
+    PolylineVertex, Ref,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
@@ -27,13 +28,20 @@ fn common(id: u64) -> EntityCommon {
     }
 }
 
+/// A polyline whose vertex `i` has `bulges[i]`, or 0 past the list's end.
 fn polyline(vertices: &[(f64, f64)], bulges: &[f64], closed: bool) -> Entity {
     Entity::LwPolyline(LwPolylineEntity {
         common: common(0x10),
-        vertices: vertices.iter().map(|&(x, y)| Point2D { x, y }).collect(),
+        vertices: vertices
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y))| PolylineVertex {
+                point: Point2D { x, y },
+                bulge: bulges.get(i).copied().unwrap_or(0.0),
+                ..PolylineVertex::default()
+            })
+            .collect(),
         closed,
-        bulges: bulges.to_vec(),
-        widths: Vec::new(),
         const_width: 0.0,
         elevation: 0.0,
         extrusion: Point3D {

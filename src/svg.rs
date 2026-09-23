@@ -18,20 +18,21 @@
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
 //! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
 //! [`infinite`] (RAY and XLINE, cut to the picture once the viewBox is
-//! known), [`ocs`] (planar entities' coordinates taken to the world),
-//! [`polyline`] (the arcs a polyline's bulges describe),
-//! [`justify`] (where a single-line text hangs and the box it fills) and
-//! [`bounds`] (viewBox and outlier trim).
+//! known), [`ocs`] (the plane a planar entity is written in),
+//! [`bulge`] (the arcs a polyline's bulges describe), [`text_codes`] (what
+//! a text's control codes stand for), [`justify`] (where a single-line text
+//! hangs and the box it fills) and [`bounds`] (viewBox and outlier trim).
 
 mod bounds;
+mod bulge;
 mod format;
 mod hatch;
 mod infinite;
 mod justify;
 mod ocs;
-mod polyline;
 mod sheet;
 mod spline;
+mod text_codes;
 mod visibility;
 
 pub(crate) use sheet::render_layout;
@@ -42,16 +43,15 @@ use crate::limits::{
     Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
     MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
 };
-use crate::text::{decode_mtext, decode_text};
 use bounds::{bbox_of, dominant_cluster_box, Box2D};
 use format::{clean, escape_xml, neg, xy, Frame};
 use justify::{Anchor, MTextBlock, TextLayout};
-use ocs::Ocs;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
-    EllipseEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEdge, LightType,
-    MLineVertex, MTextAttachment, Point2D, Point3D, Ref,
+    ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath,
+    HatchEdge, LightType, LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D,
+    PolylineVertex, Ref,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
@@ -550,24 +550,225 @@ fn polyline_element(pts: &[Point2D], closed: bool, color: &str, frame: Frame) ->
     )
 }
 
-/// Points each arc of a polyline on a tilted plane is drawn through.
-const TILTED_ARC_POINTS: usize = 16;
+/// Points sampled around a full turn of a circle drawn in a plane that is
+/// not the world's, seen from above.
+const OWN_PLANE_SAMPLES: usize = 64;
 
-/// A polyline in its own (world) coordinates: a `<polyline>` or `<polygon>`
-/// when every segment is straight, as it always was, and a `<path>` with
-/// its arcs otherwise (see [`polyline`]).
-fn polyline_drawing(
-    vertices: &[Point2D],
-    bulges: &[f64],
+/// The coordinate system a planar entity is written in. An extrusion that
+/// names no plane (zero, or not finite) is drawn in the world's.
+fn own_plane(extrusion: Point3D) -> ocs::Ocs {
+    ocs::Ocs::of(extrusion)
+        .or_else(|| {
+            ocs::Ocs::of(Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            })
+        })
+        .expect("the world Z axis names a plane")
+}
+
+/// Where the point `p` at height `z` of the plane of `extrusion` is in the
+/// world, seen from above. In the world's own plane that is `p`, whatever
+/// the height.
+fn in_world(extrusion: Point3D, p: Point2D, z: f64) -> Point2D {
+    let plane = own_plane(extrusion);
+    if plane.is_world() {
+        return p;
+    }
+    plane.to_world_xy(Point3D { x: p.x, y: p.y, z })
+}
+
+/// A CIRCLE whose extrusion is not the world Z axis. Facing down (a mirror
+/// copy) it is still a circle, at its center taken to the world; on a tilted
+/// plane it is seen from above, so it is drawn through points of its outline.
+fn circle_in_own_plane(c: &CircleEntity, color: &str, ctx: &mut Ctx) -> String {
+    let plane = own_plane(c.extrusion);
+    let frame = ctx.frame;
+    if plane.flat() {
+        let center = plane.to_world_xy(c.center);
+        ctx.consider_box(&Box2D {
+            min_x: center.x - c.radius,
+            max_x: center.x + c.radius,
+            min_y: center.y - c.radius,
+            max_y: center.y + c.radius,
+        });
+        return format!(
+            "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
+            frame.x(center.x),
+            frame.y(center.y),
+            clean(c.radius)
+        );
+    }
+    let points: Vec<Point2D> = (0..OWN_PLANE_SAMPLES)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / OWN_PLANE_SAMPLES as f64;
+            plane.to_world_xy(on_circle(c.center, c.radius, a))
+        })
+        .collect();
+    ctx.consider_all(&points);
+    polyline_element(&points, true, color, frame)
+}
+
+/// An ARC whose extrusion is not the world Z axis. Its angles run
+/// counter-clockwise about the extrusion, so facing down (a mirror copy) it
+/// runs clockwise in the world; on a tilted plane it is seen from above and
+/// drawn through points of its outline.
+///
+/// Two angles a whole turn apart name the same direction, so the sweep is
+/// taken within one turn: a stored angle of any size makes no longer an
+/// outline, and no arc that goes round more than once.
+fn arc_in_own_plane(a: &ArcEntity, color: &str, ctx: &mut Ctx) -> String {
+    let plane = own_plane(a.extrusion);
+    let frame = ctx.frame;
+    let sweep = (a.end_angle - a.start_angle).rem_euclid(std::f64::consts::TAU);
+    let start = plane.to_world_xy(on_circle(a.center, a.radius, a.start_angle));
+    let end = plane.to_world_xy(on_circle(a.center, a.radius, a.end_angle));
+    if plane.flat() {
+        let center = plane.to_world_xy(a.center);
+        // The arc's own box, not the whole circle's. Mirrored, the arc runs
+        // clockwise from the mirror image of its start -- counter-clockwise
+        // from the mirror image of its end, `pi - end`.
+        ctx.consider_box(&arc_extent(
+            center,
+            a.radius,
+            std::f64::consts::PI - (a.start_angle + sweep),
+            sweep,
+        ));
+        let r = clean(a.radius);
+        let large = u8::from(sweep > std::f64::consts::PI);
+        // Clockwise in the world, which the page's flipped y axis turns
+        // counter-clockwise: SVG's sweep flag 1.
+        return format!(
+            "<path d=\"M {} {} A {r} {r} 0 {large} 1 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+            frame.x(start.x),
+            frame.y(start.y),
+            frame.x(end.x),
+            frame.y(end.y)
+        );
+    }
+    let steps = ((OWN_PLANE_SAMPLES as f64 * sweep / std::f64::consts::TAU).ceil() as usize).max(2);
+    let points: Vec<Point2D> = (0..=steps)
+        .map(|i| {
+            let t = a.start_angle + sweep * i as f64 / steps as f64;
+            plane.to_world_xy(on_circle(a.center, a.radius, t))
+        })
+        .collect();
+    ctx.consider_all(&points);
+    polyline_element(&points, false, color, frame)
+}
+
+/// The point at `angle` on the circle of `radius` about `center`, in the
+/// circle's own coordinate system.
+fn on_circle(center: Point3D, radius: f64, angle: f64) -> Point3D {
+    Point3D {
+        x: center.x + radius * angle.cos(),
+        y: center.y + radius * angle.sin(),
+        z: center.z,
+    }
+}
+
+/// A polyline in the world's plane: a `<polyline>` or `<polygon>` when every
+/// segment is straight, a `<path>` with exact arcs otherwise.
+fn polyline_drawn(vertices: &[PolylineVertex], closed: bool, color: &str, ctx: &mut Ctx) -> String {
+    let points: Vec<Point2D> = vertices.iter().map(|v| v.point).collect();
+    ctx.consider_all(&points);
+    if vertices.iter().all(|v| v.bulge == 0.0) {
+        return polyline_element(&points, closed, color, ctx.frame);
+    }
+    bulged_polyline_element(vertices, closed, color, ctx)
+}
+
+/// A polyline on a tilted plane, seen from above: its arcs sampled in its
+/// own coordinate system, then every point taken to the world. An arc too
+/// flat to draw (see [`bulge::BulgeArc::drawable`]) is its chord.
+fn polyline_on_tilted_plane(
+    p: &LwPolylineEntity,
+    plane: ocs::Ocs,
+    color: &str,
+    ctx: &mut Ctx,
+) -> String {
+    let mut own: Vec<Point2D> = Vec::new();
+    for (from, _, arc) in bulge::segments(&p.vertices, p.closed) {
+        own.push(from);
+        if let Some(arc) = arc.filter(bulge::BulgeArc::drawable) {
+            let steps = 12;
+            own.extend(
+                (1..steps).map(|i| {
+                    arc.at(arc.start_angle + arc.sweep * (f64::from(i) / f64::from(steps)))
+                }),
+            );
+        }
+    }
+    if !p.closed || own.is_empty() {
+        own.extend(p.vertices.last().map(|v| v.point));
+    }
+    let world: Vec<Point2D> = own
+        .into_iter()
+        .map(|q| {
+            plane.to_world_xy(Point3D {
+                x: q.x,
+                y: q.y,
+                z: p.elevation,
+            })
+        })
+        .collect();
+    ctx.consider_all(&world);
+    polyline_element(&world, p.closed, color, ctx.frame)
+}
+
+/// A polyline with arc segments, as a `<path>`: a straight segment is a line,
+/// a bulged one an exact SVG arc. An arc reaches past its two ends, so each
+/// one's own box -- its ends and the extreme points it passes -- joins the
+/// bounds, through all four corners so that it still contains the arc under
+/// a rotated block placement. An arc too flat to draw (see
+/// [`bulge::BulgeArc::drawable`]) is its chord.
+fn bulged_polyline_element(
+    vertices: &[PolylineVertex],
     closed: bool,
     color: &str,
     ctx: &mut Ctx,
 ) -> String {
-    if bulges.iter().all(|b| *b == 0.0) {
-        ctx.consider_all(vertices);
-        return polyline_element(vertices, closed, color, ctx.frame);
+    let frame = ctx.frame;
+    let first = vertices[0].point;
+    let mut d = format!("M {} {}", frame.x(first.x), frame.y(first.y));
+    for (from, to, arc) in bulge::segments(vertices, closed) {
+        match arc.filter(bulge::BulgeArc::drawable) {
+            Some(arc) => {
+                let mut b = Box2D {
+                    min_x: from.x.min(to.x),
+                    max_x: from.x.max(to.x),
+                    min_y: from.y.min(to.y),
+                    max_y: from.y.max(to.y),
+                };
+                for e in arc.extremes() {
+                    b.min_x = b.min_x.min(e.x);
+                    b.max_x = b.max_x.max(e.x);
+                    b.min_y = b.min_y.min(e.y);
+                    b.max_y = b.max_y.max(e.y);
+                }
+                ctx.consider_box(&b);
+                let r = clean(arc.radius);
+                let large = u8::from(arc.sweep.abs() > std::f64::consts::PI);
+                // The y axis is flipped on the way out, which turns a
+                // counter-clockwise arc into a clockwise one on the page.
+                let sweep = u8::from(arc.sweep < 0.0);
+                let _ = write!(
+                    d,
+                    " A {r} {r} 0 {large} {sweep} {} {}",
+                    frame.x(to.x),
+                    frame.y(to.y)
+                );
+            }
+            None => {
+                let _ = write!(d, " L {} {}", frame.x(to.x), frame.y(to.y));
+            }
+        }
     }
-    polyline::bulged_element(vertices, bulges, closed, color, ctx)
+    if closed {
+        d.push_str(" Z");
+    }
+    format!("<path d=\"{d}\" fill=\"none\" stroke=\"{color}\"/>")
 }
 
 /// A dashed outline, used for the shapes this renderer draws as an indication
@@ -1054,7 +1255,18 @@ fn drawn_point_count(e: &Entity, tables: &Tables) -> usize {
                 .boundary_paths
                 .iter()
                 .map(|path| match path {
-                    HatchBoundaryPath::Polyline(v) => v.len(),
+                    // A bulged segment is drawn through as many points as
+                    // an arc edge.
+                    HatchBoundaryPath::Polyline(v) => v
+                        .iter()
+                        .map(|v| {
+                            if v.bulge == 0.0 {
+                                1
+                            } else {
+                                hatch::ARC_SEGMENTS
+                            }
+                        })
+                        .sum::<usize>(),
                     HatchBoundaryPath::Edges(edges) => edges
                         .iter()
                         .map(|edge| match edge {
@@ -1119,8 +1331,7 @@ fn numbers_are_real(e: &Entity) -> bool {
                 && is_sane_angle(el.end_angle)
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            p.vertices.iter().all(p2)
-                && real(&p.bulges)
+            p.vertices.iter().all(|v| p2(&v.point) && real(&[v.bulge]))
                 && ocs::numbers_are_real(&p.extrusion, p.elevation)
         }
         Entity::Polyline3D(p) => p.vertices.iter().all(p3),
@@ -1172,7 +1383,7 @@ fn numbers_are_real(e: &Entity) -> bool {
         | Entity::PolylinePFace(s)
         | Entity::PolylineMesh(s) => s.wireframe_edges.iter().all(|[a, b]| xyz(a) && xyz(b)),
         Entity::Hatch(h) => h.boundary_paths.iter().all(|path| match path {
-            HatchBoundaryPath::Polyline(v) => v.iter().all(p2),
+            HatchBoundaryPath::Polyline(v) => v.iter().all(|v| p2(&v.point) && real(&[v.bulge])),
             HatchBoundaryPath::Edges(edges) => edges.iter().all(|edge| match edge {
                 HatchEdge::Line { start } => p2(start),
                 HatchEdge::Arc {
@@ -1304,38 +1515,23 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 frame.y(l.end_point.y)
             ))
         }
+        Entity::Circle(c) if !own_plane(c.extrusion).is_world() => {
+            Some(circle_in_own_plane(c, &color, ctx))
+        }
+        Entity::Arc(a) if !own_plane(a.extrusion).is_world() => {
+            Some(arc_in_own_plane(a, &color, ctx))
+        }
         Entity::Circle(c) => {
-            let ocs = Ocs::new(c.extrusion, c.center.z);
-            let on_plane = Point2D {
-                x: c.center.x,
-                y: c.center.y,
-            };
-            if let Ocs::Tilted(_) = ocs {
-                // Seen from above, a circle on a tilted plane is an
-                // ellipse: drawn through points of its outline.
-                let points: Vec<Point2D> = (0..ELLIPSE_SAMPLES)
-                    .map(|i| {
-                        let t = std::f64::consts::TAU * (i as f64 / ELLIPSE_SAMPLES as f64);
-                        ocs.apply(Point2D {
-                            x: on_plane.x + c.radius * t.cos(),
-                            y: on_plane.y + c.radius * t.sin(),
-                        })
-                    })
-                    .collect();
-                ctx.consider_all(&points);
-                return Some(polyline_element(&points, true, &color, frame));
-            }
-            let center = ocs.apply(on_plane);
             ctx.consider_box(&Box2D {
-                min_x: center.x - c.radius,
-                max_x: center.x + c.radius,
-                min_y: center.y - c.radius,
-                max_y: center.y + c.radius,
+                min_x: c.center.x - c.radius,
+                max_x: c.center.x + c.radius,
+                min_y: c.center.y - c.radius,
+                max_y: c.center.y + c.radius,
             });
             Some(format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.x(center.x),
-                frame.y(center.y),
+                frame.x(c.center.x),
+                frame.y(c.center.y),
                 clean(c.radius)
             ))
         }
@@ -1349,39 +1545,14 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             if sweep < 0.0 {
                 sweep += 2.0 * std::f64::consts::PI;
             }
-            let ocs = Ocs::new(a.extrusion, a.center.z);
-            if let Ocs::Tilted(_) = ocs {
-                // Seen from above, an arc on a tilted plane is part of an
-                // ellipse: drawn through points of it.
-                let points: Vec<Point2D> = (0..=ELLIPSE_SAMPLES)
-                    .map(|i| {
-                        ocs.apply(on_plane(
-                            a.start_angle + sweep * (i as f64 / ELLIPSE_SAMPLES as f64),
-                        ))
-                    })
-                    .collect();
-                ctx.consider_all(&points);
-                return Some(polyline_element(&points, false, &color, frame));
-            }
-            let center = ocs.apply(Point2D { x, y });
-            let (p1, p2) = (
-                ocs.apply(on_plane(a.start_angle)),
-                ocs.apply(on_plane(a.end_angle)),
-            );
-            // Counter-clockwise in its plane; a mirrored plane runs it
-            // clockwise in the world, where the same arc runs
-            // counter-clockwise from the mirror image of its end, `pi - end`.
-            let (world_start, sweep_flag) = match ocs {
-                Ocs::Mirrored => (std::f64::consts::PI - (a.start_angle + sweep), 1),
-                _ => (a.start_angle, 0),
-            };
+            let (p1, p2) = (on_plane(a.start_angle), on_plane(a.end_angle));
             // The arc's own extent, not the whole circle's: a large-radius
             // fillet must not stretch the picture to its centre.
-            ctx.consider_box(&arc_extent(center, r, world_start, sweep));
+            ctx.consider_box(&arc_extent(Point2D { x, y }, r, a.start_angle, sweep));
             let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
             let r = clean(r);
             Some(format!(
-                "<path d=\"M {} {} A {r} {r} 0 {large} {sweep_flag} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+                "<path d=\"M {} {} A {r} {r} 0 {large} 0 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
                 frame.x(p1.x),
                 frame.y(p1.y),
                 frame.x(p2.x),
@@ -1452,37 +1623,29 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            match Ocs::new(p.extrusion, p.elevation) {
-                Ocs::World => Some(polyline_drawing(
-                    &p.vertices,
-                    &p.bulges,
-                    p.closed,
-                    &color,
-                    ctx,
-                )),
-                // A mirror keeps every arc an arc and turns it the other
-                // way: the vertices change side and every bulge its sign.
-                ocs @ Ocs::Mirrored => {
-                    let vertices: Vec<Point2D> = p.vertices.iter().map(|v| ocs.apply(*v)).collect();
-                    let bulges: Vec<f64> = p.bulges.iter().map(|b| -b).collect();
-                    Some(polyline_drawing(&vertices, &bulges, p.closed, &color, ctx))
-                }
-                // On a tilted plane an arc is part of an ellipse seen from
-                // above: drawn through points of it.
-                ocs @ Ocs::Tilted(_) => {
-                    let points: Vec<Point2D> = polyline::outline_points(
-                        &p.vertices,
-                        &p.bulges,
-                        p.closed,
-                        TILTED_ARC_POINTS,
-                    )
-                    .into_iter()
-                    .map(|v| ocs.apply(v))
-                    .collect();
-                    ctx.consider_all(&points);
-                    Some(polyline_element(&points, p.closed, &color, frame))
-                }
+            let plane = own_plane(p.extrusion);
+            if plane.is_world() {
+                return Some(polyline_drawn(&p.vertices, p.closed, &color, ctx));
             }
+            if plane.flat() {
+                // A mirror copy: its vertices taken to the world, and every
+                // arc turning the other way there.
+                let world: Vec<PolylineVertex> = p
+                    .vertices
+                    .iter()
+                    .map(|v| PolylineVertex {
+                        point: plane.to_world_xy(Point3D {
+                            x: v.point.x,
+                            y: v.point.y,
+                            z: p.elevation,
+                        }),
+                        bulge: -v.bulge,
+                        ..*v
+                    })
+                    .collect();
+                return Some(polyline_drawn(&world, p.closed, &color, ctx));
+            }
+            Some(polyline_on_tilted_plane(p, plane, &color, ctx))
         }
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {
@@ -1505,8 +1668,8 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 t.oblique_angle,
                 t.width_factor,
             )
-            .in_plane(&Ocs::new(t.extrusion, t.elevation));
-            let text = decode_text(&t.text);
+            .in_plane(own_plane(t.extrusion), t.elevation);
+            let text = text_codes::decode(&t.text, false);
             justify::consider_text_box(&layout, &text, ctx);
             Some(justify::text_element(
                 &layout,
@@ -1530,12 +1693,12 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 a.oblique_angle,
                 a.width_factor,
             )
-            .in_plane(&Ocs::new(a.extrusion, a.elevation));
+            .in_plane(own_plane(a.extrusion), a.elevation);
             if a.text.is_empty() {
                 ctx.consider(layout.anchor.at.x, layout.anchor.at.y);
                 return Some(String::new());
             }
-            let text = decode_text(&a.text);
+            let text = text_codes::decode(&a.text, false);
             justify::consider_text_box(&layout, &text, ctx);
             Some(justify::text_element(
                 &layout,
@@ -1593,7 +1756,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 x: m.insertion_point.x,
                 y: m.insertion_point.y,
             };
-            let decoded = decode_mtext(&m.text);
+            let decoded = text_codes::decode(&m.text, true);
             // An empty line is a real line: `\P\P` is how a note spaces its
             // paragraphs, and it takes up its line height.
             let lines: Vec<&str> = decoded
@@ -1666,10 +1829,20 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Solid(s) | Entity::Trace(s) => {
             // Classic AutoCAD SOLID/TRACE vertex order is 1-2-4-3, not 1-2-3-4.
-            // A plane seen from above keeps a quadrilateral one, whatever
-            // its tilt: the corners are all it takes.
-            let ocs = Ocs::new(s.extrusion, s.elevation);
-            let pts = [s.corner1, s.corner2, s.corner4, s.corner3].map(|p| ocs.apply(p));
+            let mut pts = [s.corner1, s.corner2, s.corner4, s.corner3];
+            let plane = own_plane(s.extrusion);
+            if !plane.is_world() {
+                // Written in its own plane: each corner taken to the world.
+                // A quadrilateral of straight edges stays one seen from
+                // above, so this is exact on a tilted plane too.
+                for p in &mut pts {
+                    *p = plane.to_world_xy(Point3D {
+                        x: p.x,
+                        y: p.y,
+                        z: s.elevation,
+                    });
+                }
+            }
             ctx.consider_all(&pts);
             Some(format!(
                 "<polygon points=\"{}\" fill=\"{color}\" fill-opacity=\"0.6\" stroke=\"none\"/>",
@@ -1678,12 +1851,39 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Face3D(f) => {
             // Unlike SOLID, 3DFACE's 4 corners are already sequential.
-            // Edge-visibility flag bits are ignored; all 4 edges always draw.
             let pts = xy(&[f.corner1, f.corner2, f.corner3, f.corner4]);
             ctx.consider_all(&pts);
+            if f.invisible_edges.iter().all(|hidden| !hidden) {
+                return Some(format!(
+                    "<polygon points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
+                    frame.points(&pts)
+                ));
+            }
+            // Only the edges the file does not hide: a mesh of faces shows
+            // its outline, not the edges its faces share.
+            let mut d = String::new();
+            for (i, hidden) in f.invisible_edges.iter().enumerate() {
+                if *hidden {
+                    continue;
+                }
+                let (a, b) = (pts[i], pts[(i + 1) % 4]);
+                if !d.is_empty() {
+                    d.push(' ');
+                }
+                let _ = write!(
+                    d,
+                    "M {} {} L {} {}",
+                    frame.x(a.x),
+                    frame.y(a.y),
+                    frame.x(b.x),
+                    frame.y(b.y)
+                );
+            }
+            if d.is_empty() {
+                return Some(String::new());
+            }
             Some(format!(
-                "<polygon points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.points(&pts)
+                "<path d=\"{d}\" fill=\"none\" stroke=\"{color}\"/>"
             ))
         }
         Entity::Ray(r) | Entity::XLine(r) => {
@@ -1990,20 +2190,20 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
     let p3 = |p: &Point3D| Point2D { x: p.x, y: p.y };
     Some(match e {
         Entity::Line(l) => p3(&l.start_point),
-        Entity::Circle(c) => Ocs::new(c.extrusion, c.center.z).apply(p3(&c.center)),
-        Entity::Arc(a) => Ocs::new(a.extrusion, a.center.z).apply(p3(&a.center)),
+        Entity::Circle(c) => in_world(c.extrusion, p3(&c.center), c.center.z),
+        Entity::Arc(a) => in_world(a.extrusion, p3(&a.center), a.center.z),
         Entity::Ellipse(el) => p3(&el.center),
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            Ocs::new(p.extrusion, p.elevation).apply(*p.vertices.first()?)
+            in_world(p.extrusion, p.vertices.first()?.point, p.elevation)
         }
         Entity::Polyline3D(p) => p3(p.vertices.first()?),
-        Entity::Text(t) => Ocs::new(t.extrusion, t.elevation).apply(t.start_point),
-        Entity::Attrib(a) => Ocs::new(a.extrusion, a.elevation).apply(a.start_point),
-        Entity::Attdef(a) => Ocs::new(a.extrusion, a.elevation).apply(a.start_point),
+        Entity::Text(t) => in_world(t.extrusion, t.start_point, t.elevation),
+        Entity::Attrib(a) => in_world(a.extrusion, a.start_point, a.elevation),
+        Entity::Attdef(a) => in_world(a.extrusion, a.start_point, a.elevation),
         Entity::Tolerance(t) => p3(&t.insertion_point),
         Entity::MText(m) => p3(&m.insertion_point),
         Entity::Point(p) => p3(&p.position),
-        Entity::Solid(s) | Entity::Trace(s) => Ocs::new(s.extrusion, s.elevation).apply(s.corner1),
+        Entity::Solid(s) | Entity::Trace(s) => in_world(s.extrusion, s.corner1, s.elevation),
         Entity::Face3D(f) => p3(&f.corner1),
         Entity::Ray(r) | Entity::XLine(r) => p3(&r.point),
         Entity::Insert(i) => Affine2::from_insert(i).apply(Point2D { x: 0.0, y: 0.0 }),
@@ -2017,7 +2217,7 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
         | Entity::PolylinePFace(s)
         | Entity::PolylineMesh(s) => p3(&s.wireframe_edges.first()?[0]),
         Entity::Hatch(h) => match h.boundary_paths.first()? {
-            HatchBoundaryPath::Polyline(v) => *v.first()?,
+            HatchBoundaryPath::Polyline(v) => v.first()?.point,
             HatchBoundaryPath::Edges(edges) => match edges.first()? {
                 HatchEdge::Line { start } => *start,
                 HatchEdge::Arc { center, .. } | HatchEdge::Ellipse { center, .. } => *center,
@@ -2592,6 +2792,274 @@ mod tests {
             color_index: 7,
             true_color: None,
             invisible: false,
+        }
+    }
+
+    fn polyline(vertices: &[(f64, f64, f64)], closed: bool) -> Entity {
+        Entity::LwPolyline(LwPolylineEntity {
+            common: plain_common(),
+            vertices: vertices
+                .iter()
+                .map(|&(x, y, bulge)| PolylineVertex {
+                    point: Point2D { x, y },
+                    bulge,
+                    ..PolylineVertex::default()
+                })
+                .collect(),
+            closed,
+            const_width: 0.0,
+            elevation: 0.0,
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+        })
+    }
+
+    /// The path's commands, each with its numbers.
+    fn path_commands(svg: &str) -> Vec<(String, Vec<f64>)> {
+        let d = svg
+            .split("d=\"")
+            .nth(1)
+            .expect("a path")
+            .split('"')
+            .next()
+            .unwrap();
+        let mut out: Vec<(String, Vec<f64>)> = Vec::new();
+        for t in d.split_whitespace() {
+            match t.parse::<f64>() {
+                Ok(n) => out.last_mut().expect("a command first").1.push(n),
+                Err(_) => out.push((t.to_string(), Vec::new())),
+            }
+        }
+        out
+    }
+
+    fn view_box(svg: &str) -> [f64; 4] {
+        let v: Vec<f64> = svg
+            .split("viewBox=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|t| t.parse().unwrap())
+            .collect();
+        [v[0], v[1], v[2], v[3]]
+    }
+
+    #[test]
+    fn a_straight_polyline_is_still_a_polyline() {
+        let svg = render_one(polyline(&[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)], false));
+        assert!(svg.contains("<polyline") && !svg.contains("<path"), "{svg}");
+    }
+
+    #[test]
+    fn a_bulged_segment_is_an_exact_arc_turning_the_way_the_bulge_says() {
+        // Bulge 1 from (0, 0) to (2, 0): a half circle of radius 1,
+        // counter-clockwise in the drawing -- which the page's flipped y axis
+        // turns clockwise, so SVG's sweep flag is 0. Bulge -1 is the mirror.
+        for (bulge, sweep) in [(1.0, 0.0), (-1.0, 1.0)] {
+            let svg = render_one(polyline(&[(0.0, 0.0, bulge), (2.0, 0.0, 0.0)], false));
+            let cmds = path_commands(&svg);
+            assert_eq!(cmds[0], ("M".to_string(), vec![0.0, 0.0]), "{svg}");
+            assert_eq!(
+                cmds[1],
+                ("A".to_string(), vec![1.0, 1.0, 0.0, 0.0, sweep, 2.0, 0.0]),
+                "{svg}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_view_box_reaches_the_arc_not_just_its_ends() {
+        // The half circle below the chord reaches y = -1 in the drawing, y = 1
+        // on the page; a view box of the two ends alone would be flat.
+        let svg = render_one(polyline(&[(0.0, 0.0, 1.0), (2.0, 0.0, 0.0)], false));
+        let [_, y, _, h] = view_box(&svg);
+        assert!(y <= 0.0 && y + h >= 1.0, "{svg}");
+    }
+
+    #[test]
+    fn a_closed_polyline_draws_its_last_bulge_back_to_the_first_vertex() {
+        let svg = render_one(polyline(
+            &[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 2.0, -1.0)],
+            true,
+        ));
+        let cmds = path_commands(&svg);
+        let names: Vec<&str> = cmds.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(names, ["M", "L", "L", "A", "Z"], "{svg}");
+        // The closing arc ends where the polyline began.
+        assert_eq!(cmds[3].1[5..], [0.0, 0.0], "{svg}");
+    }
+
+    fn mirrored() -> Point3D {
+        Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: -1.0,
+        }
+    }
+
+    #[test]
+    fn a_mirrored_solid_has_its_corners_taken_to_the_world() {
+        use uncad_model::model::SolidEntity;
+        let c = |x, y| Point2D { x, y };
+        let svg = render_one(Entity::Solid(SolidEntity {
+            common: plain_common(),
+            corner1: c(-1.0, 0.0),
+            corner2: c(-3.0, 0.0),
+            corner3: c(-1.0, 2.0),
+            corner4: c(-3.0, 2.0),
+            elevation: 5.0,
+            extrusion: mirrored(),
+        }));
+        // 1-2-4-3, each x reversed; the page flips y.
+        assert!(svg.contains("points=\"1,0 3,0 3,-2 1,-2\""), "{svg}");
+    }
+
+    fn face(invisible_edges: [bool; 4]) -> Entity {
+        use uncad_model::model::Face3DEntity;
+        let c = |x, y| Point3D { x, y, z: 0.0 };
+        Entity::Face3D(Face3DEntity {
+            common: plain_common(),
+            corner1: c(0.0, 0.0),
+            corner2: c(4.0, 0.0),
+            corner3: c(4.0, 3.0),
+            corner4: c(0.0, 3.0),
+            invisible_edges,
+        })
+    }
+
+    #[test]
+    fn a_face_draws_only_the_edges_its_file_does_not_hide() {
+        // All visible: the closed outline, as before.
+        assert!(render_one(face([false; 4])).contains("<polygon"));
+        // Second edge (corner 2 to corner 3) hidden: three separate edges.
+        let svg = render_one(face([false, true, false, false]));
+        let cmds = path_commands(&svg);
+        let names: Vec<&str> = cmds.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(names, ["M", "L", "M", "L", "M", "L"], "{svg}");
+        // Each edge is one M-L pair; the hidden one, x = 4 from y = 0 to 3
+        // (page y 0 to -3), is not among them.
+        let edges: Vec<(&[f64], &[f64])> = cmds
+            .chunks(2)
+            .map(|pair| (pair[0].1.as_slice(), pair[1].1.as_slice()))
+            .collect();
+        assert_eq!(edges.len(), 3, "{svg}");
+        assert!(
+            !edges.contains(&([4.0, 0.0].as_slice(), [4.0, -3.0].as_slice())),
+            "{svg}"
+        );
+        // Every edge hidden: nothing drawn.
+        assert!(!render_one(face([true; 4])).contains("<path"));
+    }
+
+    #[test]
+    fn a_mirrored_polyline_has_its_vertices_and_arcs_taken_to_the_world() {
+        // Written at (-2, 0) -> (0, 0) with bulge 1 (counter-clockwise in its
+        // own system, so below that chord) in a mirror copy's system: in the
+        // world it runs (2, 0) -> (0, 0) and the half circle still lies below
+        // -- the arc turns the other way, so the page's sweep flag is 1.
+        let mut e = polyline(&[(-2.0, 0.0, 1.0), (0.0, 0.0, 0.0)], false);
+        if let Entity::LwPolyline(p) = &mut e {
+            p.extrusion = mirrored();
+        }
+        let svg = render_one(e);
+        let cmds = path_commands(&svg);
+        assert_eq!(cmds[0], ("M".to_string(), vec![2.0, 0.0]), "{svg}");
+        assert_eq!(
+            cmds[1],
+            ("A".to_string(), vec![1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            "{svg}"
+        );
+        let [_, y, _, h] = view_box(&svg);
+        assert!(y <= 0.0 && y + h >= 1.0, "the arc reaches y = -1: {svg}");
+    }
+
+    #[test]
+    fn a_mirrored_circle_is_drawn_at_its_center_taken_to_the_world() {
+        let svg = render_one(Entity::Circle(CircleEntity {
+            common: plain_common(),
+            center: Point3D {
+                x: -170.0,
+                y: -50.0,
+                z: 0.0,
+            },
+            radius: 3.0,
+            extrusion: mirrored(),
+        }));
+        assert!(
+            svg.contains("<circle cx=\"170\" cy=\"50\" r=\"3\""),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_mirrored_arc_runs_clockwise_in_the_world() {
+        // Written about (-110, -50) from 30 to 150 degrees, counter-clockwise
+        // about (0, 0, -1): in the world it is about (110, -50), from
+        // (106.54, -48) over the top to (113.46, -48) -- clockwise.
+        let svg = render_one(Entity::Arc(ArcEntity {
+            common: plain_common(),
+            center: Point3D {
+                x: -110.0,
+                y: -50.0,
+                z: 0.0,
+            },
+            radius: 4.0,
+            start_angle: 30f64.to_radians(),
+            end_angle: 150f64.to_radians(),
+            extrusion: mirrored(),
+        }));
+        let cmds = path_commands(&svg);
+        let (m, a) = (&cmds[0].1, &cmds[1].1);
+        let near = |p: f64, q: f64| (p - q).abs() < 1e-9;
+        assert!(
+            near(m[0], 110.0 - 12f64.sqrt()) && near(m[1], 48.0),
+            "{svg}"
+        );
+        // r r rotation large sweep x y: the page's sweep flag 1.
+        assert_eq!(a[..5], [4.0, 4.0, 0.0, 0.0, 1.0], "{svg}");
+        assert!(
+            near(a[5], 110.0 + 12f64.sqrt()) && near(a[6], 48.0),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_circle_on_a_tilted_plane_is_drawn_as_seen_from_above() {
+        // Extrusion along the world X axis: the circle stands on edge, and
+        // from above it is a line along the world y axis through (0, 2).
+        let svg = render_one(Entity::Circle(CircleEntity {
+            common: plain_common(),
+            center: Point3D {
+                x: 2.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            radius: 1.0,
+            extrusion: Point3D {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        }));
+        assert!(svg.contains("<polygon"), "{svg}");
+        let points = svg
+            .split("points=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        for pair in points.split_whitespace() {
+            let (x, y) = pair.split_once(',').unwrap();
+            let (x, y): (f64, f64) = (x.parse().unwrap(), y.parse().unwrap());
+            assert!(x.abs() < 1e-9, "{pair}");
+            assert!((-y - 2.0).abs() <= 1.0 + 1e-9, "{pair}");
         }
     }
 

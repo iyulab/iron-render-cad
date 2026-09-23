@@ -155,19 +155,19 @@ impl TextLayout {
         }
     }
 
-    /// This layout, stated in the plane `ocs` describes, as it lies in the
-    /// world seen from above: the anchor taken there, and the text's axes
-    /// with it -- so a mirrored text reads backwards, as a text seen from
-    /// behind does, and one on a tilted plane is foreshortened.
-    pub(super) fn in_plane(self, ocs: &Ocs) -> TextLayout {
-        if *ocs == Ocs::World {
+    /// This layout, stated at height `z` in `plane`, as it lies in the world
+    /// seen from above: the anchor taken there, and the text's axes with it
+    /// -- so a mirrored text reads backwards, as a text seen from behind
+    /// does, and one on a tilted plane is foreshortened.
+    pub(super) fn in_plane(self, plane: Ocs, z: f64) -> TextLayout {
+        if plane.is_world() {
             return self;
         }
-        let m = ocs.map();
+        let m = plane.map(z);
         let [a, b, c, d] = self.axes;
         TextLayout {
             anchor: Anchor {
-                at: ocs.apply(self.anchor.at),
+                at: m.apply(self.anchor.at),
                 ..self.anchor
             },
             height: self.height,

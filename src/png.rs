@@ -15,12 +15,24 @@ use resvg::usvg::{self, fontdb};
 use std::sync::Arc;
 use uncad_model::CadDatabase;
 
+/// The largest either side of an image may be unless a caller says
+/// otherwise: [`ToPngOptions::max_edge`]'s default, and the bound
+/// [`svg_to_png`] applies. A pixel is four bytes, so the largest image this
+/// allows is 8192 x 8192 x 4 = 256 MiB of pixels.
+pub const DEFAULT_MAX_EDGE: u32 = 8192;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ToPngOptions {
     pub svg: ToSvgOptions,
     /// Multiplies the SVG's own viewBox-derived pixel size -- e.g. `2.0`
     /// renders at 2x resolution. Must be finite and > 0.
     pub scale: f32,
+    /// Neither side of the image may be more pixels than this; a larger
+    /// request fails with [`PngError::TooLarge`] before any pixel memory is
+    /// allocated. The viewBox comes from the drawing's own coordinates, so
+    /// without a bound a file decides how much memory a render asks for.
+    /// Default [`DEFAULT_MAX_EDGE`].
+    pub max_edge: u32,
 }
 
 impl Default for ToPngOptions {
@@ -28,6 +40,7 @@ impl Default for ToPngOptions {
         ToPngOptions {
             svg: ToSvgOptions::default(),
             scale: 1.0,
+            max_edge: DEFAULT_MAX_EDGE,
         }
     }
 }
@@ -49,6 +62,13 @@ pub enum PngError {
     /// The requested pixel size (viewBox size * `scale`) rounds to zero in
     /// at least one dimension.
     EmptyCanvas,
+    /// The requested pixel size exceeds the largest side allowed
+    /// ([`ToPngOptions::max_edge`]). Nothing was allocated.
+    TooLarge {
+        width: u32,
+        height: u32,
+        max_edge: u32,
+    },
     /// tiny-skia's PNG encoder failed. Stored as its `Display` text rather
     /// than the underlying `png::EncodingError` type itself, so this crate
     /// doesn't need its own direct dependency on the `png` crate (tiny-skia
@@ -61,6 +81,14 @@ impl std::fmt::Display for PngError {
         match self {
             PngError::InvalidSvg(e) => write!(f, "SVG parsing failed: {e}"),
             PngError::EmptyCanvas => write!(f, "render size is zero (check the scale)"),
+            PngError::TooLarge {
+                width,
+                height,
+                max_edge,
+            } => write!(
+                f,
+                "render size {width}x{height} px exceeds the {max_edge} px limit (use a smaller scale, or raise max_edge)"
+            ),
             PngError::Encode(e) => write!(f, "PNG encoding failed: {e}"),
         }
     }
@@ -78,7 +106,7 @@ impl std::error::Error for PngError {}
 /// failure.
 pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, PngError> {
     let svg_result = to_svg(db, options.svg);
-    let png = svg_to_png(&svg_result.svg, options.scale)?;
+    let png = rasterize(&svg_result.svg, options.scale, options.max_edge)?;
     Ok(ToPngResult {
         png,
         unsupported_types: svg_result.unsupported_types,
@@ -91,7 +119,20 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
 /// that already has an SVG string (e.g. from a separately cached
 /// [`to_svg`] call) doesn't have to re-render the CAD geometry to get a
 /// PNG out of it.
+///
+/// Neither side of the image may exceed [`DEFAULT_MAX_EDGE`] pixels; a
+/// larger request fails with [`PngError::TooLarge`] instead of allocating.
 pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, PngError> {
+    rasterize(svg, scale, DEFAULT_MAX_EDGE)
+}
+
+/// [`svg_to_png`] with an explicit bound on the image's sides.
+///
+/// The bound is checked before the pixmap exists: the pixmap's allocation
+/// cannot fail gracefully (tiny-skia allocates it with `vec!`, and a request
+/// the allocator refuses aborts the process), so a size nobody should
+/// allocate has to be refused before asking.
+fn rasterize(svg: &str, scale: f32, max_edge: u32) -> Result<Vec<u8>, PngError> {
     let mut db = fontdb::Database::new();
     db.load_system_fonts();
 
@@ -104,6 +145,13 @@ pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, PngError> {
     let size = tree.size();
     let width = (size.width() * scale).round() as u32;
     let height = (size.height() * scale).round() as u32;
+    if width > max_edge || height > max_edge {
+        return Err(PngError::TooLarge {
+            width,
+            height,
+            max_edge,
+        });
+    }
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(PngError::EmptyCanvas)?;
 
     resvg::render(
@@ -146,6 +194,75 @@ mod tests {
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 20"></svg>"#;
         let png = svg_to_png(svg, 2.5).expect("svg_to_png should succeed");
         assert_eq!(png_dimensions(&png), (25, 50));
+    }
+
+    #[test]
+    fn a_size_past_the_bound_is_refused_before_anything_is_allocated() {
+        // 1e7 units at one pixel a unit is a 1e7 x 1e7 pixmap: 400 TB, which
+        // the allocator refuses by aborting the process. It must come back
+        // as an error instead, naming the size that was asked for.
+        let svg =
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10000000 10000000"></svg>"#;
+        match svg_to_png(svg, 1.0) {
+            Err(PngError::TooLarge {
+                width,
+                height,
+                max_edge,
+            }) => {
+                assert_eq!((width, height), (10_000_000, 10_000_000));
+                assert_eq!(max_edge, DEFAULT_MAX_EDGE);
+            }
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
+        // Exactly at the bound is allowed, one pixel over is not.
+        let edge = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 10"></svg>"#;
+        assert!(rasterize(edge, 1.0, 30).is_ok());
+        assert!(matches!(
+            rasterize(edge, 1.0, 29),
+            Err(PngError::TooLarge {
+                width: 30,
+                height: 10,
+                max_edge: 29
+            })
+        ));
+    }
+
+    #[test]
+    fn to_png_refuses_a_drawing_whose_extent_is_too_large_for_its_scale() {
+        // A drawing 1e7 units across rendered at the default one pixel a
+        // unit: the render must return, and say why there is no image.
+        let mut db: CadDatabase =
+            serde_json::from_str(include_str!("../tests/golden/g2.expected.json"))
+                .expect("the golden model deserializes");
+        db.entities
+            .push(uncad_model::Entity::Line(uncad_model::model::LineEntity {
+                common: db.entities[0].common().clone(),
+                start_point: uncad_model::Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                end_point: uncad_model::Point3D {
+                    x: 1.0e7,
+                    y: 1.0e7,
+                    z: 0.0,
+                },
+            }));
+        let options = ToPngOptions {
+            svg: ToSvgOptions {
+                space: crate::Space::All,
+                ..ToSvgOptions::default()
+            },
+            ..ToPngOptions::default()
+        };
+        let err = to_png(&db, options).err().expect("too large to rasterize");
+        assert!(matches!(err, PngError::TooLarge { .. }), "{err}");
+        // A caller who asks for fewer pixels a unit gets the image.
+        let small = ToPngOptions {
+            scale: 1.0e-4,
+            ..options
+        };
+        assert!(to_png(&db, small).is_ok());
     }
 
     #[test]

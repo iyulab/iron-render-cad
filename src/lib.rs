@@ -17,5 +17,5 @@ pub mod color;
 mod png;
 mod svg;
 
-pub use png::{svg_to_png, to_png, PngError, ToPngOptions, ToPngResult};
+pub use png::{svg_to_png, to_png, PngError, ToPngOptions, ToPngResult, DEFAULT_MAX_EDGE};
 pub use svg::{to_svg, Space, ToSvgOptions, ToSvgResult};

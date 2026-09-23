@@ -95,6 +95,15 @@ to a binary choice in the model (`is_radial`): the two spherical names become an
 `linearGradient`. The two color stops are drawn as the model gives them. The gradient
 shift ("Centered") is not applied.
 
+## PNG size is bounded
+
+A PNG's pixel size is the viewBox's size in drawing units times `scale`, and the viewBox
+comes from the drawing's own coordinates. Neither side may exceed `ToPngOptions::max_edge`
+(default 8192 px; `svg_to_png` always applies the default): a larger request fails with
+`PngError::TooLarge` before any pixel memory is allocated, because the pixmap's allocation
+cannot fail gracefully -- a request the allocator refuses aborts the process. One corrupt
+LibreDWG corpus file (`example_2000.dwg`) asked for 36 TB this way.
+
 ## Fonts
 
 PNG rasterization loads the host's installed system fonts on every call and bundles none

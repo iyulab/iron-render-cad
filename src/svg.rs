@@ -1283,15 +1283,28 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             if t.text_value.is_empty() {
                 return Some(String::new());
             }
+            // A frame whose file never stated a height still has to be drawn
+            // at some size -- the renderer's choice, which is why the model
+            // does not make it: the text height (DIMTXT) of the dimension
+            // style the frame names, and 1 when that states none either.
+            let positive = |h: f64| (h.is_finite() && h > 0.0).then_some(h);
+            let height = t
+                .text_height
+                .and_then(positive)
+                .or_else(|| {
+                    t.style_name
+                        .resolved()
+                        .and_then(|name| ctx.tables.dim_styles.get(name))
+                        .and_then(|style| style.text_height)
+                        .and_then(positive)
+                })
+                .unwrap_or(1.0);
             Some(text_element(
                 Point2D {
                     x: t.insertion_point.x,
                     y: t.insertion_point.y,
                 },
-                // A frame whose file never stated a height still has to be
-                // drawn at some size; this is the renderer's choice, which
-                // is why the model does not make it.
-                t.text_height.unwrap_or(1.0),
+                height,
                 0.0,
                 &color,
                 &t.text_value,

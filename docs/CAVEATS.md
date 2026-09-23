@@ -25,7 +25,8 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **VIEWPORT and WIPEOUT as outlines**: a viewport's frame, a wipeout's clip boundary;
   neither the viewport's contents nor the wipeout's masking are rendered.
 - **TOLERANCE as plain text**: the feature-control-frame string is drawn as text, with its
-  symbol escapes unstripped.
+  symbol escapes unstripped. A frame whose file states no height is drawn at the text
+  height (DIMTXT) of the dimension style it names, and at 1 when that states none either.
 - **LIGHT as a marker**: a small marker at the position, and a dashed line to the target
   for a distant or spot light. A light whose file does not state its kind gets the marker
   alone.

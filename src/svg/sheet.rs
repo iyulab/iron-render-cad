@@ -247,9 +247,9 @@ pub(crate) fn render_layout(
 
     // The sheet frames itself; only a layout that states none is framed by
     // the crop, over the sheet's own entities.
-    let source = sheet(layout).map(|(_, source)| source);
-    let (framed, padding) = match sheet(layout).map(|(paper, _)| paper) {
-        Some(paper) => (
+    let stated = sheet(layout);
+    let (framed, padding) = match stated {
+        Some((paper, _)) => (
             Framed {
                 content: Some(paper),
                 stated_taken: false,
@@ -270,7 +270,7 @@ pub(crate) fn render_layout(
     let mut scene = ctx.finish(walked, view_box, paper_origin, crop);
     scene.undrawn_viewports = undrawn.into_iter().collect();
     scene.viewports = viewports;
-    scene.sheet = source;
+    scene.sheet = stated.map(|(_, source)| source);
     Ok(scene)
 }
 

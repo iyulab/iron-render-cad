@@ -620,8 +620,11 @@ fn resolve_entity_color(common: &EntityCommon, ctx: &Ctx) -> String {
 /// its entities under a nested transform, wrapped in a
 /// `<g transform="matrix(...)">`.
 ///
-/// ATTDEF children are skipped: an attribute *template* is not drawn, and the
-/// real values are separate top-level ATTRIB entities already rendered.
+/// ATTDEF children are skipped: an attribute *template* is not drawn. A
+/// top-level INSERT's attribute values are separate top-level ATTRIB
+/// entities, drawn on their own; a *nested* INSERT's are drawn here, beside
+/// it, from its own `attribs` -- once, even when the block also lists the
+/// same ATTRIB among its children.
 ///
 /// `owner` is the entity doing the referencing (INSERT, ACAD_TABLE,
 /// DIMENSION) and `placement` the map it applies: a reference the caps in
@@ -709,6 +712,17 @@ fn render_block_ref(
     ctx.depth = parent_depth + 1;
     ctx.scale = cumulative_scale;
 
+    // An ATTRIB the block lists among its children is drawn by the loop
+    // below as it is met; the same ATTRIB may also hang off its INSERT's
+    // attribute list, and must not be drawn twice.
+    let attrib_children: BTreeSet<EntityId> = block
+        .entities
+        .iter()
+        .filter_map(|e| match e {
+            Entity::Attrib(a) => Some(a.common.id),
+            _ => None,
+        })
+        .collect();
     let mut body_parts = Vec::new();
     for child in &block.entities {
         if matches!(child, Entity::Attdef(_)) {
@@ -716,6 +730,21 @@ fn render_block_ref(
         }
         if let Some(svg) = render_entity(child, ctx) {
             body_parts.push(svg);
+        }
+        // A nested INSERT's attribute values live on the INSERT, where
+        // nothing else picks them up: only a top-level INSERT's reach the
+        // model's top-level entities. Their coordinates are this block's,
+        // like the INSERT's own insertion point, so they are drawn here and
+        // not inside the reference.
+        if let Entity::Insert(insert) = child {
+            for a in &insert.attribs {
+                if attrib_children.contains(&a.common.id) {
+                    continue;
+                }
+                if let Some(svg) = render_entity(&Entity::Attrib(a.clone()), ctx) {
+                    body_parts.push(svg);
+                }
+            }
         }
     }
 

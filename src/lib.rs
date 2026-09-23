@@ -17,6 +17,7 @@ pub mod color;
 pub mod limits;
 mod png;
 mod svg;
+mod text;
 
 pub use png::{svg_to_png, to_png, PngError, ToPngOptions, ToPngResult, DEFAULT_MAX_EDGE};
 pub use svg::{to_svg, Space, ToSvgOptions, ToSvgResult};

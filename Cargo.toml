@@ -29,7 +29,6 @@ iter_over_hash_type = "warn"
 # The model this crate draws. A version dependency, never a path: this crate
 # must build from a standalone checkout.
 uncad-model = "0.1.0"
-regex = "1"
 # SVG -> PNG. One crate rather than separate usvg / tiny-skia / fontdb: resvg
 # re-exports all three, which keeps them in lock step.
 resvg = "0.48"

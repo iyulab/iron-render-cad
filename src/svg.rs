@@ -29,8 +29,9 @@ use crate::limits::{
     Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
     MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
 };
+use crate::text::{decode_mtext, decode_text};
 use bounds::{bbox_of, dominant_cluster_box, Box2D};
-use format::{clean, escape_xml, neg, rotate_transform_attr, strip_mtext_formatting, xy, Frame};
+use format::{clean, escape_xml, neg, rotate_transform_attr, xy, Frame};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -408,8 +409,19 @@ fn dashed_outline(pts: &[Point2D], color: &str, dash: &str, frame: Frame) -> Str
     )
 }
 
+/// The height a text is drawn at: the stored one, or 1 when the file stores
+/// 0 (which means "the style's height", a style this model does not carry)
+/// or less. `font-size="0"` would make the text vanish without a trace.
+fn effective_text_height(stored: f64) -> f64 {
+    if stored.is_finite() && stored > 0.0 {
+        stored
+    } else {
+        1.0
+    }
+}
+
 /// A single-line `<text>` at `at` -- TEXT, ATTRIB and TOLERANCE all render
-/// to this.
+/// to this. `text` is what is shown, already decoded.
 fn text_element(
     at: Point2D,
     height: f64,
@@ -418,6 +430,7 @@ fn text_element(
     text: &str,
     frame: Frame,
 ) -> String {
+    let height = effective_text_height(height);
     let (x, y) = (frame.x(at.x), frame.y(at.y));
     format!(
         "<text x=\"{x}\" y=\"{y}\" font-size=\"{height}\" fill=\"{color}\" stroke=\"none\"{}>{}</text>",
@@ -1120,7 +1133,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 t.text_height,
                 t.rotation,
                 &color,
-                &t.text,
+                &decode_text(&t.text),
                 frame,
             ))
         }
@@ -1134,7 +1147,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 a.text_height,
                 a.rotation,
                 &color,
-                &a.text,
+                &decode_text(&a.text),
                 frame,
             ))
         }
@@ -1160,18 +1173,19 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::MText(m) => {
             ctx.consider(m.insertion_point.x, m.insertion_point.y);
-            let stripped = strip_mtext_formatting(&m.text);
-            let lines: Vec<&str> = stripped.lines().filter(|l| !l.is_empty()).collect();
-            if lines.is_empty() {
+            let decoded = decode_mtext(&m.text);
+            // An empty line is a real line: `\P\P` is how a note spaces its
+            // paragraphs, and it takes up its line height.
+            let lines: Vec<&str> = decoded
+                .split('\n')
+                .map(|l| l.strip_suffix('\r').unwrap_or(l))
+                .collect();
+            if lines.iter().all(|l| l.is_empty()) {
                 return Some(String::new());
             }
             // A stored 0 means "unset" at render time (the parsed value is
             // legitimately 0 in real files), not at parse time.
-            let text_height = if m.text_height == 0.0 {
-                1.0
-            } else {
-                m.text_height
-            };
+            let text_height = effective_text_height(m.text_height);
             let line_spacing_factor = if m.line_spacing_factor == 0.0 {
                 1.0
             } else {
@@ -1182,13 +1196,25 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             let (anchor, first_baseline) =
                 mtext_placement(m.attachment, y, text_height, line_height, lines.len());
             let mut tspans = String::new();
+            // An empty line has no characters, so no `<tspan>` of its own:
+            // SVG applies a `dy` to the characters that follow it, and an
+            // empty element has none, so the shift would be lost. Its line
+            // height goes into the next drawn line's `dy` instead.
+            let mut dy = 0.0;
             for (i, line) in lines.iter().enumerate() {
-                let dy = if i == 0 { 0.0 } else { line_height };
+                if i > 0 {
+                    dy += line_height;
+                }
+                if line.is_empty() {
+                    continue;
+                }
                 let _ = write!(
                     tspans,
-                    "<tspan x=\"{x}\" dy=\"{dy}\">{}</tspan>",
+                    "<tspan x=\"{x}\" dy=\"{}\">{}</tspan>",
+                    clean(dy),
                     escape_xml(line)
                 );
+                dy = 0.0;
             }
             Some(format!(
                 "<text x=\"{x}\" y=\"{first_baseline}\" font-size=\"{text_height}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",

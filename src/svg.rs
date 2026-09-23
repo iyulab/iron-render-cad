@@ -269,6 +269,18 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// Records a local axis-aligned box through all four of its corners, so
+    /// the world box still contains it under a rotated or sheared block
+    /// placement: two diagonal corners bound it only for rotations by
+    /// multiples of 90 degrees, and at 45 degrees they land on one vertical
+    /// line.
+    fn consider_box(&mut self, b: &Box2D) {
+        self.consider(b.min_x, b.min_y);
+        self.consider(b.max_x, b.min_y);
+        self.consider(b.max_x, b.max_y);
+        self.consider(b.min_x, b.max_y);
+    }
+
     fn consider_all(&mut self, points: &[Point2D]) {
         for p in points {
             self.consider(p.x, p.y);
@@ -798,12 +810,19 @@ fn numbers_are_real(e: &Entity) -> bool {
     match e {
         Entity::Line(l) => p3(&l.start_point) && p3(&l.end_point),
         Entity::Circle(c) => p3(&c.center) && real(&[c.radius]),
-        Entity::Arc(a) => p3(&a.center) && real(&[a.radius, a.start_angle, a.end_angle]),
+        Entity::Arc(a) => {
+            p3(&a.center)
+                && real(&[a.radius])
+                && is_sane_angle(a.start_angle)
+                && is_sane_angle(a.end_angle)
+        }
         Entity::Ellipse(el) => {
             p3(&el.center)
                 && xyz(&el.major_axis_endpoint)
                 && xyz(&el.extrusion)
-                && real(&[el.axis_ratio, el.start_angle, el.end_angle])
+                && real(&[el.axis_ratio])
+                && is_sane_angle(el.start_angle)
+                && is_sane_angle(el.end_angle)
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => p.vertices.iter().all(p2),
         Entity::Polyline3D(p) => p.vertices.iter().all(p3),
@@ -862,6 +881,88 @@ fn numbers_are_real(e: &Entity) -> bool {
     }
 }
 
+/// The largest magnitude, in radians, a stored angle (or ellipse parameter)
+/// is read at. A file stores an angle in `0..2 pi`; a corrupt one can hold
+/// 1e20 or 1e247. Past a million radians an `f64` step is coarser than 1e-10
+/// radians and the value names no direction any more, so what it would
+/// describe is noise, not geometry.
+const MAX_ANGLE: f64 = 1.0e6;
+
+/// Whether `a` can be read as an angle at all: finite and within
+/// [`MAX_ANGLE`].
+fn is_sane_angle(a: f64) -> bool {
+    a.is_finite() && a.abs() <= MAX_ANGLE
+}
+
+/// The extent of the circular arc about `center` of radius `r` from
+/// `start` running `sweep` radians counter-clockwise (`0 <= sweep <= 2 pi`):
+/// its two ends and every point in between where it crosses an axis
+/// direction -- the arc's own box, not the whole circle's.
+///
+/// The crossings are at most four: a fifth would repeat the first one's
+/// direction. That bound is by construction rather than by trusting the
+/// angles, so a stored angle of any size cannot make this loop long.
+fn arc_extent(center: Point2D, r: f64, start: f64, sweep: f64) -> Box2D {
+    let mut b = Box2D {
+        min_x: f64::INFINITY,
+        max_x: f64::NEG_INFINITY,
+        min_y: f64::INFINITY,
+        max_y: f64::NEG_INFINITY,
+    };
+    let mut take = |angle: f64| {
+        let (x, y) = (center.x + r * angle.cos(), center.y + r * angle.sin());
+        b.min_x = b.min_x.min(x);
+        b.max_x = b.max_x.max(x);
+        b.min_y = b.min_y.min(y);
+        b.max_y = b.max_y.max(y);
+    };
+    take(start);
+    take(start + sweep);
+    let quarter = std::f64::consts::FRAC_PI_2;
+    let first = (start / quarter).ceil();
+    for i in 0..4 {
+        let angle = (first + f64::from(i)) * quarter;
+        if angle.is_nan() || angle > start + sweep + 1e-12 {
+            break;
+        }
+        take(angle);
+    }
+    b
+}
+
+/// The extent of the elliptical arc from parameter `start` running `sweep`
+/// (`0 < sweep < 2 pi`), for an ellipse in a plane parallel to XY: its two
+/// ends plus whichever of the four points where `dx/dt` or `dy/dt` vanishes
+/// fall inside the sweep. `x(t) = cx + Mx cos t + nx sin t` is stationary
+/// where `tan t = nx / Mx`, i.e. at `atan2(nx, Mx)` and half a turn later;
+/// `y` likewise.
+fn ellipse_arc_extent(el: &EllipseEntity, start: f64, sweep: f64) -> Box2D {
+    let mut b = Box2D {
+        min_x: f64::INFINITY,
+        max_x: f64::NEG_INFINITY,
+        min_y: f64::INFINITY,
+        max_y: f64::NEG_INFINITY,
+    };
+    let mut take = |p: Point2D| {
+        b.min_x = b.min_x.min(p.x);
+        b.max_x = b.max_x.max(p.x);
+        b.min_y = b.min_y.min(p.y);
+        b.max_y = b.max_y.max(p.y);
+    };
+    take(ellipse_point(el, start));
+    take(ellipse_point(el, start + sweep));
+    let (m, n) = (el.major_axis_endpoint, ellipse_minor_axis(el));
+    for base in [n.x.atan2(m.x), n.y.atan2(m.y)] {
+        for half_turn in [0.0, std::f64::consts::PI] {
+            let offset = (base + half_turn - start).rem_euclid(std::f64::consts::TAU);
+            if offset <= sweep + 1e-12 {
+                take(ellipse_point(el, start + offset));
+            }
+        }
+    }
+    b
+}
+
 /// [`render_entity`] once the caps have let the entity through.
 fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     let color = resolve_entity_color(e.common(), ctx);
@@ -879,8 +980,12 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::Circle(c) => {
-            ctx.consider(c.center.x - c.radius, c.center.y - c.radius);
-            ctx.consider(c.center.x + c.radius, c.center.y + c.radius);
+            ctx.consider_box(&Box2D {
+                min_x: c.center.x - c.radius,
+                max_x: c.center.x + c.radius,
+                min_y: c.center.y - c.radius,
+                max_y: c.center.y + c.radius,
+            });
             Some(format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
                 frame.x(c.center.x),
@@ -889,8 +994,6 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::Arc(a) => {
-            ctx.consider(a.center.x - a.radius, a.center.y - a.radius);
-            ctx.consider(a.center.x + a.radius, a.center.y + a.radius);
             let (x, y, r) = (a.center.x, a.center.y, a.radius);
             let (x1, y1) = (x + r * a.start_angle.cos(), y + r * a.start_angle.sin());
             let (x2, y2) = (x + r * a.end_angle.cos(), y + r * a.end_angle.sin());
@@ -898,6 +1001,9 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             if sweep < 0.0 {
                 sweep += 2.0 * std::f64::consts::PI;
             }
+            // The arc's own extent, not the whole circle's: a large-radius
+            // fillet must not stretch the picture to its centre.
+            ctx.consider_box(&arc_extent(Point2D { x, y }, r, a.start_angle, sweep));
             let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
             let r = clean(r);
             Some(format!(
@@ -910,18 +1016,24 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Ellipse(el) => {
             let rx = el.major_axis_endpoint.x.hypot(el.major_axis_endpoint.y);
-            ctx.consider(el.center.x - rx, el.center.y - rx);
-            ctx.consider(el.center.x + rx, el.center.y + rx);
-            let ry = clean(rx * el.axis_ratio);
-            let rx = clean(rx);
-            let rot = el
-                .major_axis_endpoint
-                .y
-                .atan2(el.major_axis_endpoint.x)
-                .to_degrees();
+            let ry = rx * el.axis_ratio;
+            let theta = el.major_axis_endpoint.y.atan2(el.major_axis_endpoint.x);
+            let rot = theta.to_degrees();
             let (cx, cy) = (frame.x(el.center.x), frame.y(el.center.y));
             let sweep = ellipse_sweep(el.start_angle, el.end_angle);
             if sweep >= std::f64::consts::TAU {
+                // The box of the ellipse this element draws: semi-axes rx
+                // and ry turned by the major axis's angle.
+                let (cos, sin) = (theta.cos(), theta.sin());
+                let hx = (rx * cos).hypot(ry * sin);
+                let hy = (rx * sin).hypot(ry * cos);
+                ctx.consider_box(&Box2D {
+                    min_x: el.center.x - hx,
+                    max_x: el.center.x + hx,
+                    min_y: el.center.y - hy,
+                    max_y: el.center.y + hy,
+                });
+                let (rx, ry) = (clean(rx), clean(ry.abs()));
                 return Some(format!(
                     "<ellipse cx=\"{cx}\" cy=\"{cy}\" rx=\"{rx}\" ry=\"{ry}\" transform=\"rotate({} {cx} {cy})\" fill=\"none\" stroke=\"{color}\"/>",
                     neg(rot)
@@ -942,8 +1054,12 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                         )
                     })
                     .collect();
+                ctx.consider_all(&points);
                 return Some(polyline_element(&points, false, &color, frame));
             }
+            // The arc's own extent, not the whole ellipse's.
+            ctx.consider_box(&ellipse_arc_extent(el, el.start_angle, sweep));
+            let (rx, ry) = (clean(rx), clean(ry.abs()));
             // A partial ellipse: the same exact arc command ARC uses, with
             // the axes and rotation of the ellipse. Counter-clockwise in the
             // drawing is clockwise once y is flipped, hence sweep-flag 0 --

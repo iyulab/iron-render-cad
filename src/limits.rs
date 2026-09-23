@@ -107,7 +107,8 @@ pub enum Cap {
     /// it fills. The hatch keeps its outline but not its pattern.
     HatchTile,
     /// A coordinate, size or angle the entity is drawn from is not a real
-    /// number (`NaN`, infinite). It is not drawn.
+    /// number (`NaN`, infinite), or an angle is beyond a million radians,
+    /// where it names no direction. It is not drawn.
     NotANumber,
     /// The entity's extent reaches more than 1e15 drawing units from the
     /// origin, past what a viewBox can be built from. It is not drawn and
@@ -156,7 +157,7 @@ pub struct LimitReport {
     /// emit: in the picture, but with their block expansion cut short.
     pub truncated_parts: usize,
     /// Entities not drawn because a coordinate, size or angle they are drawn
-    /// from is not a real number.
+    /// from is not a real number, or an angle names no direction.
     pub unreadable_entities: usize,
     /// Top-level entities not drawn because their extent reaches more than
     /// 1e15 drawing units from the origin.

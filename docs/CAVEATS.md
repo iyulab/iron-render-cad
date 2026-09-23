@@ -42,6 +42,11 @@ useful than a gap -- but a reader should know which parts are approximate:
   its base point counts towards the extent, and the line is drawn dashed from edge to edge
   of the viewBox (grown by a percent of its diagonal) -- or not at all where it misses it.
 
+- **Extents are the drawn shape's own box**: an ARC counts its own box towards the picture's
+  extent, not its whole circle's, and an ELLIPSE arc the part that is drawn; a curved entity
+  inside a rotated block is measured through all four corners of its box, which contains it
+  under any placement but is up to a factor of sqrt 2 larger at 45 degrees.
+
 What the renderer cannot draw at all (a type the model has no shape for arrives as
 `Entity::Unknown`) is reported in `ToSvgResult::unsupported_types`, sorted by name. The
 one type that will stay there for good is `ACAD_PROXY_ENTITY`: an opaque per-application
@@ -140,7 +145,9 @@ the cap that acted on each). The caps:
   rasterizer's pixmap, so a corrupt spacing of 1e12 over a ten-unit shape asks for a pixmap
   1e11 pixels on a side. The pattern is dropped and the outline kept.
 - An entity drawn from a coordinate, size or angle that is not a real number (`NaN`,
-  infinite) is not drawn: it names no place, and SVG has no way to write it.
+  infinite) is not drawn: it names no place, and SVG has no way to write it. Nor is an ARC
+  or ELLIPSE whose angle is beyond a million radians, where an `f64` step is coarser than
+  1e-10 radians and the value names no direction.
 - An entity whose extent reaches more than 1e15 drawing units from the origin is not drawn
   and does not count towards the extent: the viewBox, the stroke width, the padding and
   every dash length are derived from the extent, so one entity at 1e150 would take all of

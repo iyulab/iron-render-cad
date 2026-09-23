@@ -103,7 +103,10 @@ The renderer targets a plain white background. ACI index 7 (`0xFFFFFF`, "white/b
 is AutoCAD's own auto-invert-by-background special case, and a LAYER entry's color can
 report as white unconditionally, so any resolved pure-white color is flipped to black --
 otherwise it is silently invisible, white on white. Applied at every color-producing path,
-not just literal index 7. There is no option for a dark background.
+not just literal index 7. There is no option for a dark background. A PNG is drawn on
+opaque white by default (`Background::White`), so a viewer that shows it on a dark page
+does not lose the black lines; `Background::Transparent`, and `svg_to_png`, leave the
+background transparent. The PNG is written as 8-bit RGBA either way.
 
 Inside a block reference, an entity on layer 0 is drawn on the reference's layer -- the
 standard way a symbol drawn on layer 0 takes the color of the layer it is inserted on --

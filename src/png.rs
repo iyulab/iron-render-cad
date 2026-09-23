@@ -41,6 +41,22 @@ pub struct ToPngOptions {
     pub max_edge: u32,
     /// The fonts text is drawn with. Default [`Fonts::System`].
     pub fonts: Fonts,
+    /// What the pixels the drawing does not touch are. Default
+    /// [`Background::White`].
+    pub background: Background,
+}
+
+/// What the pixels a PNG's drawing does not touch are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum Background {
+    /// Opaque white. The default: the renderer's colors are chosen for a
+    /// white page (pure white is drawn black), so a transparent image shown
+    /// on a dark viewer or flattened onto black loses the black lines.
+    #[default]
+    White,
+    /// Fully transparent, as [`svg_to_png`] draws.
+    Transparent,
 }
 
 impl Default for ToPngOptions {
@@ -51,6 +67,7 @@ impl Default for ToPngOptions {
             stroke_px: None,
             max_edge: DEFAULT_MAX_EDGE,
             fonts: Fonts::default(),
+            background: Background::default(),
         }
     }
 }
@@ -267,6 +284,7 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
         px_per_unit as f32,
         options.max_edge,
         &options.fonts,
+        options.background,
     )?;
     Ok(ToPngResult {
         png,
@@ -285,9 +303,16 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
 ///
 /// Neither side of the image may exceed [`DEFAULT_MAX_EDGE`] pixels; a
 /// larger request fails with [`PngError::TooLarge`] instead of allocating.
-/// Text is drawn with the host's fonts ([`Fonts::System`]).
+/// Text is drawn with the host's fonts ([`Fonts::System`]), on a
+/// transparent background.
 pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, PngError> {
-    rasterize(svg, scale, DEFAULT_MAX_EDGE, &Fonts::System)
+    rasterize(
+        svg,
+        scale,
+        DEFAULT_MAX_EDGE,
+        &Fonts::System,
+        Background::Transparent,
+    )
 }
 
 /// [`svg_to_png`] with an explicit bound on the image's sides.
@@ -296,7 +321,13 @@ pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, PngError> {
 /// cannot fail gracefully (tiny-skia allocates it with `vec!`, and a request
 /// the allocator refuses aborts the process), so a size nobody should
 /// allocate has to be refused before asking.
-fn rasterize(svg: &str, scale: f32, max_edge: u32, fonts: &Fonts) -> Result<Vec<u8>, PngError> {
+fn rasterize(
+    svg: &str,
+    scale: f32,
+    max_edge: u32,
+    fonts: &Fonts,
+    background: Background,
+) -> Result<Vec<u8>, PngError> {
     let tree = usvg::Tree::from_str(svg, &usvg_options(fonts)).map_err(PngError::InvalidSvg)?;
 
     let size = tree.size();
@@ -310,6 +341,9 @@ fn rasterize(svg: &str, scale: f32, max_edge: u32, fonts: &Fonts) -> Result<Vec<
         });
     }
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(PngError::EmptyCanvas)?;
+    if background == Background::White {
+        pixmap.fill(tiny_skia::Color::WHITE);
+    }
 
     catch_panic(|| {
         resvg::render(
@@ -392,9 +426,9 @@ mod tests {
         }
         // Exactly at the bound is allowed, one pixel over is not.
         let edge = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 10"></svg>"#;
-        assert!(rasterize(edge, 1.0, 30, &Fonts::System).is_ok());
+        assert!(rasterize(edge, 1.0, 30, &Fonts::System, Background::White).is_ok());
         assert!(matches!(
-            rasterize(edge, 1.0, 29, &Fonts::System),
+            rasterize(edge, 1.0, 29, &Fonts::System, Background::White),
             Err(PngError::TooLarge {
                 width: 30,
                 height: 10,
@@ -533,7 +567,7 @@ mod tests {
         assert_eq!(junk.fontdb.len(), 0);
         // A text drawn with no font at all is a blank, not an error.
         let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 10"><text x="0" y="8" font-size="8">ABC</text></svg>"#;
-        assert!(rasterize(svg, 1.0, 100, &Fonts::Custom(Vec::new())).is_ok());
+        assert!(rasterize(svg, 1.0, 100, &Fonts::Custom(Vec::new()), Background::White).is_ok());
         // The bytes are not in the options' debug text.
         assert_eq!(
             format!("{:?}", Fonts::Custom(vec![Arc::from(&[0u8; 5][..])])),
@@ -570,6 +604,34 @@ mod tests {
             !text.flattened().children().is_empty(),
             "the text was shaped with the custom face"
         );
+    }
+
+    #[test]
+    fn the_background_is_white_unless_asked_for_transparent() {
+        // Read back one corner pixel, which no drawing touches: the
+        // property asked for, not a comparison with a reference image.
+        let db: CadDatabase =
+            serde_json::from_str(include_str!("../tests/golden/g1.expected.json"))
+                .expect("the golden model deserializes");
+        let corner = |background| {
+            let png = to_png(
+                &db,
+                ToPngOptions {
+                    background,
+                    ..ToPngOptions::default()
+                },
+            )
+            .expect("renders")
+            .png;
+            let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("a PNG");
+            pixmap.pixel(0, 0).expect("a pixel")
+        };
+        let white = corner(Background::White);
+        assert_eq!(
+            (white.red(), white.green(), white.blue(), white.alpha()),
+            (255, 255, 255, 255)
+        );
+        assert_eq!(corner(Background::Transparent).alpha(), 0);
     }
 
     #[test]

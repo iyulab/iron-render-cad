@@ -4,9 +4,10 @@
 use super::format::{clean, neg};
 use super::Ctx;
 use crate::color::{tint_toward_white, true_color_to_hex, DEFAULT_COLOR};
+use crate::limits::{Cap, MAX_HATCH_TILE_SPAN};
 use std::fmt::Write as _;
 use uncad_model::model::{
-    HatchBoundaryPath, HatchEdge, HatchEntity, HatchGradient, HatchPatternLine, Point2D,
+    EntityId, HatchBoundaryPath, HatchEdge, HatchEntity, HatchGradient, HatchPatternLine, Point2D,
 };
 
 /// Renders one HATCH: always an outline of its boundary paths, plus -- in
@@ -16,8 +17,22 @@ use uncad_model::model::{
 /// Gradient is checked before `solid_fill` because AutoCAD sets `solid_fill`
 /// on gradient hatches too (a gradient is a "solid style" fill with a varying
 /// color), so the other order would always shadow the gradient branch.
-pub(super) fn render_hatch(h: &HatchEntity, color: &str, ctx: &mut Ctx) -> Option<String> {
+pub(super) fn render_hatch(
+    h: &HatchEntity,
+    id: EntityId,
+    color: &str,
+    ctx: &mut Ctx,
+) -> Option<String> {
     let mut subpaths = Vec::new();
+    // The boundary's own extent, in the coordinates the pattern tiles, so a
+    // pattern whose spacing dwarfs the shape can be told apart (see
+    // [`MAX_HATCH_TILE_SPAN`]).
+    let (mut lo_x, mut hi_x, mut lo_y, mut hi_y) = (
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+    );
     for path in &h.boundary_paths {
         let pts: Vec<Point2D> = match path {
             HatchBoundaryPath::Polyline(vertices) => vertices.clone(),
@@ -25,6 +40,14 @@ pub(super) fn render_hatch(h: &HatchEntity, color: &str, ctx: &mut Ctx) -> Optio
         };
         if pts.len() < 2 {
             continue;
+        }
+        for p in &pts {
+            if p.x.is_finite() && p.y.is_finite() {
+                lo_x = lo_x.min(p.x);
+                hi_x = hi_x.max(p.x);
+                lo_y = lo_y.min(p.y);
+                hi_y = hi_y.max(p.y);
+            }
         }
         ctx.consider_all(&pts);
         let mut d = String::from("M ");
@@ -54,12 +77,23 @@ pub(super) fn render_hatch(h: &HatchEntity, color: &str, ctx: &mut Ctx) -> Optio
         ));
     }
 
+    let span = if lo_x.is_finite() {
+        (hi_x - lo_x).hypot(hi_y - lo_y)
+    } else {
+        0.0
+    };
     let scale = ctx.scale;
-    let pattern_fills: Vec<String> = h
-        .pattern_lines
-        .iter()
-        .filter_map(|pl| render_pattern_line(pl, color, scale, &d, ctx))
-        .collect();
+    let mut pattern_fills: Vec<String> = Vec::new();
+    for pl in &h.pattern_lines {
+        match render_pattern_line(pl, color, scale, span, &d, ctx) {
+            Tile::Drawn(fill) => pattern_fills.push(fill),
+            Tile::Degenerate => {}
+            Tile::TooLarge => {
+                ctx.limits.hatch_patterns_dropped += 1;
+                ctx.limits.note(Cap::HatchTile, id, "HATCH");
+            }
+        }
+    }
     if pattern_fills.is_empty() {
         // No usable pattern data (unreadable deflines, or every defline
         // degenerate) -- outline only.
@@ -83,6 +117,12 @@ fn arc_sweep(start_angle: f64, end_angle: f64, is_ccw: bool) -> f64 {
     sweep
 }
 
+/// Points a curved ARC boundary edge is drawn through.
+pub(super) const ARC_SEGMENTS: usize = 12;
+
+/// Points a curved ELLIPSE boundary edge is drawn through.
+pub(super) const ELLIPSE_SEGMENTS: usize = 16;
+
 /// Chord-approximates one boundary edge, in the same spirit as SPLINE and
 /// curved 3DSOLID edges elsewhere. Each edge's final point is omitted, since it
 /// coincides with the next edge's first point (or, for a single closed edge
@@ -98,7 +138,7 @@ fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
             is_ccw,
         } => {
             let sweep = arc_sweep(*start_angle, *end_angle, *is_ccw);
-            let segments = 12;
+            let segments = ARC_SEGMENTS;
             (0..segments)
                 .map(|i| {
                     let a = start_angle + sweep * (i as f64 / segments as f64);
@@ -122,7 +162,7 @@ fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
             let rot = end.y.atan2(end.x);
             let (cos_r, sin_r) = (rot.cos(), rot.sin());
             let sweep = arc_sweep(*start_angle, *end_angle, *is_ccw);
-            let segments = 16;
+            let segments = ELLIPSE_SEGMENTS;
             (0..segments)
                 .map(|i| {
                     let a = start_angle + sweep * (i as f64 / segments as f64);
@@ -144,11 +184,25 @@ fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
     }
 }
 
+/// What [`render_pattern_line`] made of one definition line.
+#[derive(Debug)]
+enum Tile {
+    /// The fill element referencing the new `<pattern>`.
+    Drawn(String),
+    /// Nothing to tile: a non-finite or zero perpendicular spacing.
+    Degenerate,
+    /// The tile is more than [`MAX_HATCH_TILE_SPAN`] times the boundary's
+    /// diagonal; it is left out and the caller reports it.
+    TooLarge,
+}
+
 /// Renders one [`HatchPatternLine`] as a tiled `<pattern>` fill of the
 /// boundary path `path_d`: the definition goes into `ctx.defs` (emitted once
-/// into a top-level `<defs>`) and the returned element references it. `None`
-/// if the line family is degenerate (non-finite or zero perpendicular spacing,
-/// so nothing to tile).
+/// into a top-level `<defs>`) and the returned element references it.
+/// [`Tile::Degenerate`] if the line family is degenerate (non-finite or zero
+/// perpendicular spacing, so nothing to tile), and [`Tile::TooLarge`] if its
+/// tile dwarfs the shape it fills: `boundary_span` is the boundary's diagonal,
+/// in the same coordinates.
 ///
 /// Clipping is left to SVG's own fill mechanism rather than hand-rolled
 /// polygon clipping.
@@ -183,14 +237,15 @@ fn render_pattern_line(
     pl: &HatchPatternLine,
     color: &str,
     stroke_scale: f64,
+    boundary_span: f64,
     path_d: &str,
     ctx: &mut Ctx,
-) -> Option<String> {
+) -> Tile {
     let (dir_x, dir_y) = (pl.angle.cos(), pl.angle.sin());
     let (perp_x, perp_y) = (-dir_y, dir_x);
     let spacing = (pl.offset.x * perp_x + pl.offset.y * perp_y).abs();
     if !spacing.is_finite() || spacing < 1e-6 {
-        return None;
+        return Tile::Degenerate;
     }
 
     let dashes: Vec<f64> = pl.dash_pattern.iter().map(|d| d.abs()).collect();
@@ -200,6 +255,13 @@ fn render_pattern_line(
     } else {
         spacing
     };
+    // The tile's size is the rasterizer's pixmap size for it, at the filled
+    // element's device scale: a corrupt spacing of 1e12 over a ten-unit
+    // boundary is a request for a pixmap 1e11 pixels on a side. Such a tile
+    // can show at most one line of the pattern anyway.
+    if boundary_span > 0.0 && width.max(spacing) > MAX_HATCH_TILE_SPAN * boundary_span {
+        return Tile::TooLarge;
+    }
     let dasharray = if dashes.is_empty() {
         String::new()
     } else {
@@ -223,7 +285,7 @@ fn render_pattern_line(
         super::stroke_width_placeholder(stroke_scale)
     ));
 
-    Some(format!(
+    Tile::Drawn(format!(
         "<path d=\"{path_d}\" fill=\"url(#{id})\" stroke=\"none\" fill-rule=\"evenodd\"/>"
     ))
 }
@@ -341,7 +403,10 @@ mod tests {
             offset: Point2D { x: 1.0, y: 0.0 },
             dash_pattern: vec![],
         };
-        assert!(render_pattern_line(&pl, "#000000", 1.0, "M 0 0 Z", &mut ctx).is_none());
+        assert!(matches!(
+            render_pattern_line(&pl, "#000000", 1.0, 100.0, "M 0 0 Z", &mut ctx),
+            Tile::Degenerate
+        ));
         assert!(ctx.defs.is_empty());
     }
 
@@ -356,14 +421,18 @@ mod tests {
             dash_pattern: vec![],
         };
         let path_d = "M 0 0 L 1 1 Z";
-        let first = render_pattern_line(&pl, "#000000", 1.0, path_d, &mut ctx)
-            .expect("valid spacing should produce a fill");
+        let Tile::Drawn(first) = render_pattern_line(&pl, "#000000", 1.0, 100.0, path_d, &mut ctx)
+        else {
+            panic!("valid spacing should produce a fill")
+        };
         assert_eq!(ctx.defs.len(), 1);
         assert!(ctx.defs[0].contains("<pattern"));
         assert!(first.contains("fill=\"url(#hp0)\""));
 
-        let second = render_pattern_line(&pl, "#000000", 1.0, path_d, &mut ctx)
-            .expect("second call should also succeed");
+        let Tile::Drawn(second) = render_pattern_line(&pl, "#000000", 1.0, 100.0, path_d, &mut ctx)
+        else {
+            panic!("second call should also succeed")
+        };
         assert_eq!(
             ctx.defs.len(),
             2,

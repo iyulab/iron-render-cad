@@ -23,13 +23,17 @@ mod hatch;
 mod spline;
 
 use crate::color::{resolve_color, DEFAULT_COLOR};
+use crate::limits::{
+    Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
+    MAX_SVG_BODY_BYTES,
+};
 use bounds::{dominant_cluster_box, Box2D};
 use format::{escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
-    EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex, MTextAttachment,
-    Point2D, Point3D,
+    EllipseEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEdge, LightType,
+    MLineVertex, MTextAttachment, Point2D, Point3D, Ref,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
@@ -77,6 +81,10 @@ pub struct ToSvgResult {
     /// whose INSERTs all resolved to nothing looks the same as one whose
     /// INSERTs drew.
     pub empty_blocks: Vec<String>,
+    /// What the renderer's bounds on numbers from the file left out of the
+    /// picture -- empty for every well-formed drawing. See
+    /// [`crate::limits`].
+    pub limits: LimitReport,
 }
 
 // --- block transform ---------------------------------------------------
@@ -89,15 +97,6 @@ fn svg_matrix(t: &Affine2) -> [f64; 6] {
 }
 
 // --- render context ----------------------------------------------------
-
-/// Generous enough for any real drawing this project has been checked against
-/// while still cutting off combinatorial block-reference blowup quickly: 10
-/// INSERTs per level exhausts it by nesting level 6, long before the 20-level
-/// depth cap could engage.
-const BLOCK_REF_BUDGET: u32 = 1_000_000;
-
-/// How deep block references may nest before rendering gives up.
-const MAX_BLOCK_REF_DEPTH: u32 = 20;
 
 struct Ctx<'a> {
     xs: Vec<f64>,
@@ -130,6 +129,18 @@ struct Ctx<'a> {
     /// block at every level can still fan out combinatorially before the depth
     /// cap is ever reached.
     block_ref_budget: u32,
+    /// Bytes of drawing body emitted so far, kept equal to the length of the
+    /// strings [`render_entity`] has handed back. Once it reaches
+    /// [`MAX_SVG_BODY_BYTES`] nothing further is drawn.
+    emitted: usize,
+    /// [`emitted`](Self::emitted) when the current top-level entity started,
+    /// so one part can be bounded by [`MAX_ENTITY_SVG_BYTES`] as well.
+    entity_start: usize,
+    /// Whether [`MAX_ENTITY_SVG_BYTES`] cut the current top-level entity's
+    /// block expansion short. Reset for each top-level entity.
+    part_truncated: bool,
+    /// What the caps in [`crate::limits`] took away from this render.
+    limits: LimitReport,
 }
 
 impl<'a> Ctx<'a> {
@@ -150,7 +161,11 @@ impl<'a> Ctx<'a> {
             transform: Affine2::IDENTITY,
             defs: Vec::new(),
             next_def_id: 0,
-            block_ref_budget: BLOCK_REF_BUDGET,
+            block_ref_budget: MAX_BLOCK_REFS,
+            emitted: 0,
+            entity_start: 0,
+            part_truncated: false,
+            limits: LimitReport::default(),
         }
     }
 
@@ -462,15 +477,18 @@ fn resolve_entity_color(common: &EntityCommon, ctx: &Ctx) -> String {
 ///
 /// ATTDEF children are skipped: an attribute *template* is not drawn, and the
 /// real values are separate top-level ATTRIB entities already rendered.
+///
+/// `owner` is the entity doing the referencing (INSERT, ACAD_TABLE,
+/// DIMENSION) and `placement` the map it applies: a reference the caps in
+/// [`crate::limits`] stop is reported under the owner's ID.
 fn render_block_ref(
-    block_name: &str,
-    insertion_point: Point2D,
-    x_scale: f64,
-    y_scale: f64,
-    rotation: f64,
+    owner: &Entity,
+    block_name: &Ref<String>,
+    placement: Affine2,
     color: &str,
     ctx: &mut Ctx,
 ) -> String {
+    let block_name = block_name.name();
     let Some(block) = ctx.tables.block_records.get(block_name) else {
         return String::new();
     };
@@ -478,12 +496,17 @@ fn render_block_ref(
         ctx.empty_blocks.insert(block_name.to_string());
         return String::new();
     }
+    // How deep references nest and how many there are both come from the
+    // file, and a block that references itself makes both unbounded.
     if ctx.depth > MAX_BLOCK_REF_DEPTH || ctx.block_ref_budget == 0 {
+        ctx.limits.block_refs_dropped += 1;
+        ctx.limits
+            .note(Cap::BlockRefs, owner.common().id, owner.type_name());
         return String::new();
     }
     ctx.block_ref_budget -= 1;
 
-    let child_transform = Affine2::placement(insertion_point, x_scale, y_scale, rotation);
+    let child_transform = placement;
     // Compose: local (within the block) -> world, via this block's own
     // placement followed by the parent's already-established one. The
     // parent's own state is restored afterwards.
@@ -552,6 +575,97 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     if e.common().invisible {
         return None;
     }
+    // The caps between a malformed file and an unbounded allocation (see
+    // [`crate::limits`]), checked before any work is done for this entity,
+    // so exhausting a budget unwinds the whole walk however deep inside
+    // nested block references it happens.
+    if ctx.emitted >= MAX_SVG_BODY_BYTES {
+        ctx.limits.entities_dropped += 1;
+        ctx.limits
+            .note(Cap::DocumentBytes, e.common().id, e.type_name());
+        return None;
+    }
+    if ctx.emitted - ctx.entity_start >= MAX_ENTITY_SVG_BYTES {
+        // Inside a top-level entity that has already drawn as much as one
+        // may. What it drew is kept and [`to_svg`] reports the part as
+        // truncated; because the walk stops at an entity boundary, every
+        // enclosing `<g>` still closes.
+        ctx.part_truncated = true;
+        return None;
+    }
+    if drawn_point_count(e, ctx.tables) > MAX_ENTITY_POINTS {
+        ctx.limits.oversized_entities += 1;
+        ctx.limits
+            .note(Cap::EntityPoints, e.common().id, e.type_name());
+        return None;
+    }
+    let before = ctx.emitted;
+    let svg = draw_entity(e, ctx);
+    // The string handed back contains everything the children below this
+    // call already charged, so the total is set to its length rather than
+    // incremented by it: nothing is counted twice.
+    if let Some(svg) = &svg {
+        ctx.emitted = before + svg.len();
+    }
+    svg
+}
+
+/// How many points from the file this entity would be drawn with -- the
+/// count [`MAX_ENTITY_POINTS`] bounds. Only the arrays a file can make
+/// arbitrarily long are counted: a fixed-shape entity is 0, and so is a
+/// block reference, whose expansion the other caps bound.
+fn drawn_point_count(e: &Entity, tables: &Tables) -> usize {
+    match e {
+        Entity::LwPolyline(p) | Entity::Polyline2D(p) => p.vertices.len(),
+        Entity::Polyline3D(p) => p.vertices.len(),
+        Entity::Spline(s) => s.fit_points.len().saturating_add(s.control_points.len()),
+        Entity::Leader(l) => l.vertices.len(),
+        Entity::MultiLeader(m) => m.lines.iter().map(Vec::len).sum(),
+        Entity::MLine(l) => {
+            // One polyline per offset the style defines.
+            let lines = l
+                .mlinestyle_name
+                .resolved()
+                .and_then(|n| tables.mlinestyles.get(n))
+                .map_or(1, |offsets| offsets.len().max(1));
+            l.vertices.len().saturating_mul(lines)
+        }
+        Entity::Wipeout(w) => w.boundary.len(),
+        Entity::Solid3D(s) | Entity::Region(s) | Entity::PolylinePFace(s) => {
+            s.wireframe_edges.len()
+        }
+        Entity::Hatch(h) => {
+            let boundary: usize = h
+                .boundary_paths
+                .iter()
+                .map(|path| match path {
+                    HatchBoundaryPath::Polyline(v) => v.len(),
+                    HatchBoundaryPath::Edges(edges) => edges
+                        .iter()
+                        .map(|edge| match edge {
+                            HatchEdge::Line { .. } => 1,
+                            HatchEdge::Arc { .. } => hatch::ARC_SEGMENTS,
+                            HatchEdge::Ellipse { .. } => hatch::ELLIPSE_SEGMENTS,
+                            HatchEdge::Spline { control_points } => control_points.len(),
+                        })
+                        .sum(),
+                })
+                .sum();
+            // The boundary is written once for the outline and once more
+            // for every pattern line that tiles it.
+            let paths = if h.gradient.is_some() || h.solid_fill {
+                1
+            } else {
+                1 + h.pattern_lines.len()
+            };
+            boundary.saturating_mul(paths)
+        }
+        _ => 0,
+    }
+}
+
+/// [`render_entity`] once the caps have let the entity through.
+fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     let color = resolve_entity_color(e.common(), ctx);
     match e {
         Entity::Line(l) => {
@@ -777,41 +891,31 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::Insert(i) => Some(render_block_ref(
-            i.block_name.name(),
-            Point2D {
-                x: i.insertion_point.x,
-                y: i.insertion_point.y,
-            },
-            i.scale.x,
-            i.scale.y,
-            i.rotation,
+            e,
+            &i.block_name,
+            Affine2::from_insert(i),
             &color,
             ctx,
         )),
         Entity::AcadTable(a) => Some(render_block_ref(
-            a.block_name.name(),
-            Point2D {
-                x: a.insertion_point.x,
-                y: a.insertion_point.y,
-            },
-            a.scale.x,
-            a.scale.y,
-            a.rotation,
+            e,
+            &a.block_name,
+            Affine2::placement(
+                Point2D {
+                    x: a.insertion_point.x,
+                    y: a.insertion_point.y,
+                },
+                a.scale.x,
+                a.scale.y,
+                a.rotation,
+            ),
             &color,
             ctx,
         )),
         Entity::Dimension(d) => {
             // The cached geometry block is already in final world coordinates,
             // so it is drawn with an identity transform.
-            let svg = render_block_ref(
-                d.block_name.name(),
-                Point2D { x: 0.0, y: 0.0 },
-                1.0,
-                1.0,
-                0.0,
-                &color,
-                ctx,
-            );
+            let svg = render_block_ref(e, &d.block_name, Affine2::IDENTITY, &color, ctx);
             if svg.is_empty() {
                 ctx.unsupported.insert("DIMENSION".to_string());
                 return None;
@@ -870,7 +974,7 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         Entity::PolylinePFace(p) => {
             render_wireframe_entity(&p.wireframe_edges, "POLYLINE_PFACE", &color, ctx)
         }
-        Entity::Hatch(h) => hatch::render_hatch(h, &color, ctx),
+        Entity::Hatch(h) => hatch::render_hatch(h, h.common.id, &color, ctx),
         Entity::Leader(l) => {
             if l.vertices.is_empty() {
                 return None;
@@ -1034,7 +1138,16 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
     let mut ctx = Ctx::new(&db.tables);
     for e in select_entities_for_space(db, options.space) {
         ctx.reset_entity_bounds();
+        ctx.entity_start = ctx.emitted;
+        ctx.part_truncated = false;
         if let Some(svg) = render_entity(e, &mut ctx) {
+            if ctx.part_truncated {
+                // What the entity drew before its budget ran out is kept;
+                // the report says the part is incomplete.
+                ctx.limits.truncated_parts += 1;
+                ctx.limits
+                    .note(Cap::EntityBytes, e.common().id, e.type_name());
+            }
             if !svg.is_empty() {
                 body.push(svg);
             }
@@ -1091,6 +1204,7 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         svg,
         unsupported_types: ctx.unsupported.into_iter().collect(),
         empty_blocks: ctx.empty_blocks.into_iter().collect(),
+        limits: ctx.limits,
     }
 }
 
@@ -1156,12 +1270,26 @@ mod tests {
         };
 
         let mut ctx = Ctx::new(&tables);
+        let owner = Entity::Insert(InsertEntity {
+            common: common.clone(),
+            block_name: Ref::Resolved("R".to_string()),
+            insertion_point: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            scale: Point3D {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            rotation: 0.0,
+            attribs: Vec::new(),
+        });
         let svg = render_block_ref(
-            "R",
-            Point2D { x: 0.0, y: 0.0 },
-            1.0,
-            1.0,
-            0.0,
+            &owner,
+            &Ref::Resolved("R".to_string()),
+            Affine2::IDENTITY,
             DEFAULT_COLOR,
             &mut ctx,
         );

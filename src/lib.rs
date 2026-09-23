@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 
 pub mod color;
+pub mod limits;
 mod png;
 mod svg;
 

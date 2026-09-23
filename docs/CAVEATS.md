@@ -95,6 +95,29 @@ to a binary choice in the model (`is_radial`): the two spherical names become an
 `linearGradient`. The two color stops are drawn as the model gives them. The gradient
 shift ("Centered") is not applied.
 
+## Every number the renderer takes from the file is bounded
+
+A count, a scale or a spacing in a drawing is whatever the file says, and a corrupt one
+becomes an allocation size or a loop bound. So each is capped, far above anything a real
+drawing reaches, and every render reports what a cap left out in `ToSvgResult::limits` /
+`ToPngResult::limits` (a `LimitReport`: counts, and the IDs of the first 100 entities with
+the cap that acted on each). The caps:
+
+- Block references nest at most 20 deep and one render expands at most 100,000 of them;
+  a reference past either is not followed.
+- One render emits at most 64 MiB of drawing body; an entity whose turn comes after that is
+  not drawn.
+- One top-level entity emits at most 16 MiB; past that its block expansion stops at the
+  next entity boundary, and what it drew is kept and reported as truncated.
+- One entity is drawn with at most 100,000 points (a polyline's vertices, a spline's points,
+  a hatch boundary's points times the paths drawn through them); a larger one is not drawn.
+- A HATCH pattern's tile may be at most 16 times the boundary's diagonal: the tile is the
+  rasterizer's pixmap, so a corrupt spacing of 1e12 over a ten-unit shape asks for a pixmap
+  1e11 pixels on a side. The pattern is dropped and the outline kept.
+
+A block holding one LINE and eight INSERTs of itself used to expand into a million
+references and a 139 MB SVG before anything stopped it.
+
 ## PNG size is bounded
 
 A PNG's pixel size is the viewBox's size in drawing units times `scale`, and the viewBox

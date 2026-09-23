@@ -20,7 +20,8 @@ useful than a gap -- but a reader should know which parts are approximate:
   of its outline seen from above. A HATCH written in its own plane -- mirrored or tilted -- is drawn
   as it is written, inside a group that takes that plane to the page seen from above; the map is
   affine, so its boundary, pattern lines and gradient all stay exact, though a tilted plane's
-  foreshortening also narrows the strokes across it. A block reference in a mirror copy's plane is
+  foreshortening also narrows the strokes across it. A TEXT or ATTRIB in its own plane is drawn the same way (a mirror
+  copy's reads reversed, as it does in the world). A block reference in a mirror copy's plane is
   placed exactly; one on a tilted plane is placed in its plane and that plane seen from above.)
 - **3DSOLID / REGION / POLYLINE_PFACE as isometric wireframes**: the model carries a
   solid's edges only; the renderer projects them isometrically and draws the lines.

@@ -381,6 +381,25 @@ fn in_view(
     })
 }
 
+/// What `draw` emits in the coordinates of the plane `extrusion` names, at
+/// height `elevation`: as it is in the world's own plane, and otherwise
+/// wrapped in a group that takes that plane to the page seen from above.
+/// Exact for anything drawn in the plane -- a text's glyphs included, which a
+/// mirror copy's plane shows reversed.
+fn in_own_plane(
+    extrusion: Point3D,
+    elevation: f64,
+    ctx: &mut Ctx,
+    draw: impl FnOnce(&mut Ctx) -> Option<String>,
+) -> Option<String> {
+    let plane = own_plane(extrusion);
+    if plane.is_world() {
+        draw(ctx)
+    } else {
+        in_view(plane_seen_from_above(plane, elevation), ctx, draw)
+    }
+}
+
 /// A CIRCLE whose extrusion is not the world Z axis. Facing down (a mirror
 /// copy) it is still a circle, at its center taken to the world; on a tilted
 /// plane it is seen from above, so it is drawn through points of its outline.
@@ -1022,7 +1041,7 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider_all_3d(&p.vertices);
             Some(polyline_element(&xy(&p.vertices), p.closed, &color))
         }
-        Entity::Text(t) => {
+        Entity::Text(t) => in_own_plane(t.extrusion, t.elevation, ctx, |ctx| {
             ctx.consider(t.start_point.x, t.start_point.y);
             if let Some(a) = t.alignment_point {
                 ctx.consider(a.x, a.y);
@@ -1032,20 +1051,23 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 &color,
                 &text_codes::decode(&t.text, false),
             ))
-        }
+        }),
         Entity::Attrib(a) => {
-            ctx.consider(a.start_point.x, a.start_point.y);
-            if let Some(p) = a.alignment_point {
-                ctx.consider(p.x, p.y);
-            }
             if a.text.is_empty() {
+                ctx.consider(a.start_point.x, a.start_point.y);
                 return Some(String::new());
             }
-            Some(aligned_text_element(
-                &TextPlacement::from(a),
-                &color,
-                &text_codes::decode(&a.text, false),
-            ))
+            in_own_plane(a.extrusion, a.elevation, ctx, |ctx| {
+                ctx.consider(a.start_point.x, a.start_point.y);
+                if let Some(p) = a.alignment_point {
+                    ctx.consider(p.x, p.y);
+                }
+                Some(aligned_text_element(
+                    &TextPlacement::from(a),
+                    &color,
+                    &text_codes::decode(&a.text, false),
+                ))
+            })
         }
         Entity::Tolerance(t) => {
             ctx.consider(t.insertion_point.x, t.insertion_point.y);
@@ -1283,20 +1305,11 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         Entity::PolylinePFace(p) => {
             render_wireframe_entity(&p.wireframe_edges, "POLYLINE_PFACE", &color, ctx)
         }
-        Entity::Hatch(h) => {
-            let plane = own_plane(h.extrusion);
-            if plane.is_world() {
-                hatch::render_hatch(h, &color, ctx)
-            } else {
-                // Everything a HATCH states -- boundary, pattern lines,
-                // gradient -- is in its own plane, and that plane seen from
-                // above is an affine map of the page: drawn in the plane and
-                // placed by it, the whole fill stays exact.
-                in_view(plane_seen_from_above(plane, h.elevation), ctx, |ctx| {
-                    hatch::render_hatch(h, &color, ctx)
-                })
-            }
-        }
+        // Everything a HATCH states -- boundary, pattern lines, gradient --
+        // is in its own plane, so the whole fill stays exact.
+        Entity::Hatch(h) => in_own_plane(h.extrusion, h.elevation, ctx, |ctx| {
+            hatch::render_hatch(h, &color, ctx)
+        }),
         Entity::Leader(l) => {
             if l.vertices.is_empty() {
                 return None;
@@ -2010,6 +2023,33 @@ mod tests {
     }
 
     #[test]
+    fn a_mirrored_text_is_drawn_in_its_plane_and_placed_by_it() {
+        let svg = render_one(Entity::Text(TextEntity {
+            common: plain_common(),
+            start_point: Point2D {
+                x: -170.0,
+                y: -72.0,
+            },
+            text_height: 2.5,
+            text: "MIRROR".to_string(),
+            rotation: 0.0,
+            horizontal_alignment: TextHorizontalAlignment::Left,
+            vertical_alignment: TextVerticalAlignment::Baseline,
+            alignment_point: None,
+            width_factor: 1.0,
+            elevation: 0.0,
+            extrusion: mirrored(),
+        }));
+        assert!(
+            svg.contains("<g transform=\"matrix(-1 0 0 1 0 0)\">"),
+            "{svg}"
+        );
+        // The anchor is the world's (170, -72): the view is centred there.
+        let [x, _, w, _] = view_box(&svg);
+        close(x + w / 2.0, 170.0);
+    }
+
+    #[test]
     fn a_hatch_in_the_world_plane_is_not_wrapped() {
         let svg = render_one(square_hatch(
             0.0,
@@ -2308,6 +2348,12 @@ mod tests {
             vertical_alignment: v,
             alignment_point,
             width_factor,
+            elevation: 0.0,
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         })
     }
 
@@ -2376,6 +2422,12 @@ mod tests {
             vertical_alignment: TextVerticalAlignment::Middle,
             alignment_point: Some(Point2D { x: 40.0, y: 3.0 }),
             width_factor: 0.9,
+            elevation: 0.0,
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         }));
         assert!(
             svg.contains("x=\"40\" y=\"-3\"")

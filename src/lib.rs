@@ -12,8 +12,9 @@
 //! layout can be drawn as its sheet, with the model shown through its
 //! viewports ([`layout_to_svg`], [`layout_to_png`]). A [`Scene`] keeps one
 //! render -- a [`Part`] per top-level entity, with the box of the world it
-//! covers -- to write documents of any window from any subset of its parts:
-//! render once, assemble many. A render is for people and for an agent's
+//! covers -- to write documents of any window from any subset of its parts,
+//! and PNGs of any [`View`] (a grid of pixels laid over the world): render
+//! once, assemble many. A render is for people and for an agent's
 //! fallback view; it is never evidence that a drawing or an edit is
 //! correct.
 //!
@@ -29,7 +30,7 @@ mod svg;
 
 pub use png::{
     layout_to_png, svg_to_png, to_png, Background, Fonts, PngError, PngSize, ToPngOptions,
-    ToPngResult, DEFAULT_MAX_EDGE,
+    ToPngResult, View, DEFAULT_MAX_EDGE,
 };
 pub use svg::{
     layout_to_svg, to_svg, Hidden, LayoutError, Part, Rect, Scene, Space, ToSvgOptions,

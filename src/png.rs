@@ -9,10 +9,11 @@
 //! step instead of risking a version mismatch across independently pinned
 //! crates.
 
-use crate::svg::{self, ToSvgOptions};
+use crate::svg::{self, Part, Rect, Scene, ToSvgOptions};
 use resvg::tiny_skia;
 use resvg::usvg::{self, fontdb};
 use std::sync::{Arc, OnceLock};
+use uncad_model::model::Point2D;
 use uncad_model::CadDatabase;
 
 /// The largest either side of an image may be unless a caller says
@@ -191,8 +192,80 @@ fn usvg_options(fonts: &Fonts) -> usvg::Options<'static> {
     }
 }
 
+/// A picture's pixels laid over the world: `width` x `height` pixels,
+/// `px_per_unit` of them to a drawing unit, the top-left corner of the
+/// top-left pixel at the world point (`left`, `top`). Pixel rows run down
+/// the picture, the world's y up it, so a world point `(x, y)` is at pixel
+/// `((x - left) * px_per_unit, (top - y) * px_per_unit)` -- fractional, a
+/// pixel's centre at `.5`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct View {
+    pub left: f64,
+    pub top: f64,
+    pub px_per_unit: f64,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl View {
+    /// The pixels showing `window` at `px_per_unit`: from its top-left
+    /// corner, as many whole pixels as it is wide and tall at that scale,
+    /// each rounded to the nearest. The pixels then end where the last one
+    /// does, within half a pixel of the window's far edges; the scale is
+    /// exact. `None` when the scale is not a positive number, or the size
+    /// is not one a picture can have (not a number, or past `u32::MAX`).
+    pub fn of(window: Rect, px_per_unit: f64) -> Option<View> {
+        if !(px_per_unit.is_finite() && px_per_unit > 0.0) {
+            return None;
+        }
+        let px = |units: f64| {
+            let n = (units * px_per_unit).round();
+            (n.is_finite() && n >= 0.0 && n <= f64::from(u32::MAX)).then_some(n as u32)
+        };
+        Some(View {
+            left: window.min_x,
+            top: window.max_y,
+            px_per_unit,
+            width: px(window.width())?,
+            height: px(window.height())?,
+        })
+    }
+
+    /// The world rectangle the pixels cover.
+    pub fn window(&self) -> Rect {
+        Rect::new(
+            self.left,
+            self.top - f64::from(self.height) / self.px_per_unit,
+            self.left + f64::from(self.width) / self.px_per_unit,
+            self.top,
+        )
+    }
+
+    /// Where the world point `p` is in the picture, in pixels from its
+    /// top-left corner.
+    pub fn world_to_px(&self, p: Point2D) -> [f64; 2] {
+        [
+            (p.x - self.left) * self.px_per_unit,
+            (self.top - p.y) * self.px_per_unit,
+        ]
+    }
+
+    /// The world point at pixel position `[px, py]`: the inverse of
+    /// [`world_to_px`](Self::world_to_px).
+    pub fn px_to_world(&self, [px, py]: [f64; 2]) -> Point2D {
+        Point2D {
+            x: self.left + px / self.px_per_unit,
+            y: self.top - py / self.px_per_unit,
+        }
+    }
+}
+
 pub struct ToPngResult {
     pub png: Vec<u8>,
+    /// Where the image's pixels lie in the world: its size, its scale and
+    /// the world point of its top-left corner. For a layout's sheet, the
+    /// paper in the layout's paper units.
+    pub view: View,
     pub unsupported_types: Vec<String>,
     /// See [`ToSvgResult::empty_blocks`](crate::ToSvgResult::empty_blocks).
     pub empty_blocks: Vec<String>,
@@ -304,15 +377,28 @@ fn png_result(scene: svg::Scene, options: &ToPngOptions) -> Result<ToPngResult, 
         px_per_unit,
         scene.auto_stroke_width,
     );
-    let png = rasterize(
-        &scene.document(stroke),
-        px_per_unit as f32,
+    let scale = px_per_unit as f32;
+    let tree = parse(&scene.document(stroke), &options.fonts)?;
+    let (width, height) = pixel_size(&tree, scale);
+    let png = draw(
+        &tree,
+        scale,
+        width,
+        height,
         options.max_edge,
-        &options.fonts,
         options.background,
     )?;
     Ok(ToPngResult {
         png,
+        view: View {
+            left: scene.view_box.min_x,
+            top: scene.view_box.max_y,
+            // What the picture was drawn at: the rasterizer's scale is an
+            // `f32`.
+            px_per_unit: f64::from(scale),
+            width,
+            height,
+        },
         unsupported_types: scene.unsupported_types,
         empty_blocks: scene.empty_blocks,
         unresolved_block_refs: scene.unresolved_block_refs,
@@ -342,12 +428,59 @@ pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, PngError> {
     )
 }
 
+impl Scene {
+    /// The picture `view` describes, as PNG bytes: the document of the
+    /// view's [`window`](View::window) from the parts `keep` accepts
+    /// ([`Scene::svg`]), drawn at exactly `view.width` x `view.height`
+    /// pixels, every stroke `stroke_px` pixels wide (a width that is not a
+    /// positive number keeps the scene's automatic one), text in `fonts`,
+    /// on `background`.
+    ///
+    /// The view is the caller's, so the picture is exactly that grid of
+    /// pixels: pixel `(0, 0)`'s corner at (`view.left`, `view.top`), one
+    /// pixel `1 / view.px_per_unit` units wide -- the same map
+    /// [`View::world_to_px`] computes. A side of 0 pixels is
+    /// [`PngError::EmptyCanvas`], one past [`DEFAULT_MAX_EDGE`]
+    /// [`PngError::TooLarge`].
+    pub fn png(
+        &self,
+        view: &View,
+        stroke_px: f64,
+        fonts: &Fonts,
+        background: Background,
+        keep: impl Fn(&Part) -> bool,
+    ) -> Result<Vec<u8>, PngError> {
+        if !(view.px_per_unit.is_finite() && view.px_per_unit > 0.0) {
+            return Err(PngError::EmptyCanvas);
+        }
+        // Refused before anything is written or parsed, let alone
+        // allocated: see [`draw`].
+        if view.width > DEFAULT_MAX_EDGE || view.height > DEFAULT_MAX_EDGE {
+            return Err(PngError::TooLarge {
+                width: view.width,
+                height: view.height,
+                max_edge: DEFAULT_MAX_EDGE,
+            });
+        }
+        let stroke = stroke_width(
+            None,
+            Some(stroke_px),
+            view.px_per_unit,
+            self.auto_stroke_width,
+        );
+        let tree = parse(&self.svg(view.window(), stroke, keep), fonts)?;
+        draw(
+            &tree,
+            view.px_per_unit as f32,
+            view.width,
+            view.height,
+            DEFAULT_MAX_EDGE,
+            background,
+        )
+    }
+}
+
 /// [`svg_to_png`] with an explicit bound on the image's sides.
-///
-/// The bound is checked before the pixmap exists: the pixmap's allocation
-/// cannot fail gracefully (tiny-skia allocates it with `vec!`, and a request
-/// the allocator refuses aborts the process), so a size nobody should
-/// allocate has to be refused before asking.
 fn rasterize(
     svg: &str,
     scale: f32,
@@ -355,11 +488,41 @@ fn rasterize(
     fonts: &Fonts,
     background: Background,
 ) -> Result<Vec<u8>, PngError> {
-    let tree = usvg::Tree::from_str(svg, &usvg_options(fonts)).map_err(PngError::InvalidSvg)?;
+    let tree = parse(svg, fonts)?;
+    let (width, height) = pixel_size(&tree, scale);
+    draw(&tree, scale, width, height, max_edge, background)
+}
 
+/// `svg` parsed for drawing with `fonts`.
+fn parse(svg: &str, fonts: &Fonts) -> Result<usvg::Tree, PngError> {
+    usvg::Tree::from_str(svg, &usvg_options(fonts)).map_err(PngError::InvalidSvg)
+}
+
+/// The pixel size of `tree`'s viewBox at `scale`, each side rounded to the
+/// nearest pixel.
+fn pixel_size(tree: &usvg::Tree, scale: f32) -> (u32, u32) {
     let size = tree.size();
-    let width = (size.width() * scale).round() as u32;
-    let height = (size.height() * scale).round() as u32;
+    (
+        (size.width() * scale).round() as u32,
+        (size.height() * scale).round() as u32,
+    )
+}
+
+/// `tree` drawn at `scale` into a `width` x `height` pixmap from its
+/// viewBox's top-left corner, as PNG bytes.
+///
+/// The bound is checked before the pixmap exists: the pixmap's allocation
+/// cannot fail gracefully (tiny-skia allocates it with `vec!`, and a request
+/// the allocator refuses aborts the process), so a size nobody should
+/// allocate has to be refused before asking.
+fn draw(
+    tree: &usvg::Tree,
+    scale: f32,
+    width: u32,
+    height: u32,
+    max_edge: u32,
+    background: Background,
+) -> Result<Vec<u8>, PngError> {
     if width > max_edge || height > max_edge {
         return Err(PngError::TooLarge {
             width,
@@ -374,7 +537,7 @@ fn rasterize(
 
     catch_panic(|| {
         resvg::render(
-            &tree,
+            tree,
             tiny_skia::Transform::from_scale(scale, scale),
             &mut pixmap.as_mut(),
         )

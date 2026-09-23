@@ -291,7 +291,15 @@ coordinates, so at a fixed scale the file decides the size. Neither side may exc
 (default 8192 px; `svg_to_png` always applies the default): a larger request fails with
 `PngError::TooLarge` before any pixel memory is allocated, because the pixmap's allocation
 cannot fail gracefully -- a request the allocator refuses aborts the process. One corrupt
-LibreDWG corpus file (`example_2000.dwg`) asked for 36 TB this way.
+LibreDWG corpus file (`example_2000.dwg`) asked for 36 TB this way. A picture a caller
+sizes itself (`Scene::png` with its own `View`) is bounded the same way, by the default.
+
+Every PNG says which pixels it drew (`ToPngResult::view`): its size, its scale and the world
+point of its top-left corner, so a pixel can be taken back to the drawing. The scale it
+states is the one the rasterizer drew at, which keeps it in single precision; the size is
+the viewBox's at that scale rounded to whole pixels, so the last row and column cover up to
+half a pixel more or less of the drawing than the viewBox does. `Scene::png` draws exactly
+the view it is given instead.
 
 Strokes are about 1/6000th of the viewBox diagonal wide by default, which is below a pixel at
 most sizes; `ToPngOptions::stroke_px` sets them in output pixels instead.

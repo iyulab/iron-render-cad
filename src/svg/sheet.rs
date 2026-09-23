@@ -14,9 +14,9 @@
 use super::bounds::{intersects, Box2D};
 use super::format::{clean, Frame};
 use super::{
-    choose_origin, crop_parts, crop_report, infinite, scene, select_entities_for_space,
-    select_owned_by, stroke_width_placeholder, svg_matrix, view_box_of, walk, Ctx, Framed, Part,
-    Rect, Scene, Space, ToSvgOptions,
+    choose_origin, crop_parts, crop_report, infinite, invert_point, scene,
+    select_entities_for_space, select_owned_by, stroke_width_placeholder, svg_matrix, view_box_of,
+    walk, Ctx, Framed, Part, Rect, Scene, Space, ToSvgOptions,
 };
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -56,6 +56,52 @@ impl std::fmt::Display for LayoutError {
 }
 
 impl std::error::Error for LayoutError {}
+
+/// Where a layout's sheet -- the paper [`crate::layout_to_svg`] frames --
+/// comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SheetSource {
+    /// The layout's limits, which AutoCAD keeps equal to the paper's
+    /// placement (margins and plot origin folded in).
+    Limits,
+    /// The paper its plot settings describe: the paper's size, turned a
+    /// quarter for a quarter-turned plot, placed by the margins and plot
+    /// origin, in the layout's paper units.
+    PlotSettings,
+}
+
+/// One viewport of a layout's sheet, and what it shows of the model.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ViewportReport {
+    /// The VIEWPORT's reference ID.
+    pub id: EntityId,
+    /// Its frame on the paper, in paper units, as the file states it.
+    pub frame: Rect,
+    /// Whether it is the layout's overall viewport: the sheet itself, as
+    /// paper space shows it, not a window onto the model. A DXF numbers it
+    /// 1; the binary format stores no number, and there it is the viewport
+    /// whose view is its own frame (as tall as the frame, centred on it,
+    /// untwisted).
+    pub overall: bool,
+    /// The map from the model's world to the paper the model is drawn
+    /// through this viewport with -- `paper = C + s (R(twist) (p - T) -
+    /// V)`, `C` the frame's centre, `T` the view's target, `V` its centre
+    /// in display coordinates and `s` the frame's height over the view's.
+    /// Its scale is the square root of its determinant's magnitude, its
+    /// twist `atan2(b, a)`. `Some` exactly when the model is drawn through
+    /// the viewport: it is on, is not the overall viewport and has a plan
+    /// view this renderer draws (a viewport that is on and not overall but
+    /// has no such view is in [`crate::ToSvgResult::undrawn_viewports`]).
+    pub model_to_paper: Option<Affine2>,
+    /// The part of the model the frame shows: the frame's lower-left,
+    /// lower-right, upper-right and upper-left corners taken back through
+    /// [`model_to_paper`](Self::model_to_paper) -- four corners, since a
+    /// twisted view shows a turned rectangle of the model. `Some` exactly
+    /// when that map is, and it can be inverted.
+    pub model_window: Option<[Point2D; 4]>,
+}
 
 /// The block record a model-tab layout shows.
 const MODEL_SPACE: &str = "*MODEL_SPACE";
@@ -97,6 +143,7 @@ pub(crate) fn render_layout(
         oy: model_origin.y,
     };
     let mut undrawn = BTreeSet::new();
+    let mut viewports = Vec::new();
     // Every viewport of the block, its own layer hidden or not: a frame on
     // a layer that is off or not plotted -- the usual way to hide the
     // border -- still shows its view; only its border is left out.
@@ -104,6 +151,7 @@ pub(crate) fn render_layout(
         Entity::Viewport(v) => Some(v),
         _ => None,
     }) {
+        viewports.push(report(vp));
         let view = match shows(vp) {
             Shows::Nothing => continue,
             Shows::Undrawable => {
@@ -199,7 +247,8 @@ pub(crate) fn render_layout(
 
     // The sheet frames itself; only a layout that states none is framed by
     // the crop, over the sheet's own entities.
-    let (framed, padding) = match sheet(layout) {
+    let source = sheet(layout).map(|(_, source)| source);
+    let (framed, padding) = match sheet(layout).map(|(paper, _)| paper) {
         Some(paper) => (
             Framed {
                 content: Some(paper),
@@ -220,7 +269,47 @@ pub(crate) fn render_layout(
     );
     let mut scene = ctx.finish(walked, view_box, paper_origin, crop);
     scene.undrawn_viewports = undrawn.into_iter().collect();
+    scene.viewports = viewports;
+    scene.sheet = source;
     Ok(scene)
+}
+
+/// What [`ViewportReport`] says of `vp`.
+fn report(vp: &ViewportEntity) -> ViewportReport {
+    let (cx, cy, hw, hh) = (vp.center.x, vp.center.y, vp.width / 2.0, vp.height / 2.0);
+    let corners = [
+        Point2D {
+            x: cx - hw,
+            y: cy - hh,
+        },
+        Point2D {
+            x: cx + hw,
+            y: cy - hh,
+        },
+        Point2D {
+            x: cx + hw,
+            y: cy + hh,
+        },
+        Point2D {
+            x: cx - hw,
+            y: cy + hh,
+        },
+    ];
+    let model_to_paper = match shows(vp) {
+        Shows::View(view) => Some(model_to_paper(vp, &view)),
+        Shows::Nothing | Shows::Undrawable => None,
+    };
+    let model_window = model_to_paper.and_then(|m| {
+        let [a, b, c, d] = corners.map(|p| invert_point(&m, p));
+        Some([a?, b?, c?, d?])
+    });
+    ViewportReport {
+        id: vp.common.id,
+        frame: Rect::new(cx - hw, cy - hh, cx + hw, cy + hh),
+        overall: is_overall(vp),
+        model_to_paper,
+        model_window,
+    }
 }
 
 /// What a viewport shows of the model.
@@ -312,15 +401,16 @@ fn model_to_paper(vp: &ViewportEntity, view: &ViewportView) -> Affine2 {
 /// the layout's origin (the rule ezdxf's `reset_paper_limits` applies). The
 /// settings are in millimetres; a layout drawn in inches has them divided
 /// by 25.4. `None` when the layout states neither.
-fn sheet(layout: &LayoutRecord) -> Option<Box2D> {
+fn sheet(layout: &LayoutRecord) -> Option<(Box2D, SheetSource)> {
     let (lo, hi) = (layout.limits_min, layout.limits_max);
     if [lo.x, lo.y, hi.x, hi.y].iter().all(|v| v.is_finite()) && hi.x > lo.x && hi.y > lo.y {
-        return Some(Box2D {
+        let limits = Box2D {
             min_x: lo.x,
             max_x: hi.x,
             min_y: lo.y,
             max_y: hi.y,
-        });
+        };
+        return Some((limits, SheetSource::Limits));
     }
     let p = &layout.plot_settings;
     let sized = |v: f64| v.is_finite() && v > 0.0;
@@ -343,12 +433,13 @@ fn sheet(layout: &LayoutRecord) -> Option<Box2D> {
         x: finite(p.margin_left) + finite(p.plot_origin.x),
         y: finite(p.margin_bottom) + finite(p.plot_origin.y),
     };
-    Some(Box2D {
+    let paper = Box2D {
         min_x: -shift.x * per_mm,
         max_x: (width - shift.x) * per_mm,
         min_y: -shift.y * per_mm,
         max_y: (height - shift.y) * per_mm,
-    })
+    };
+    Some((paper, SheetSource::PlotSettings))
 }
 
 #[cfg(test)]
@@ -402,7 +493,8 @@ mod tests {
             (p(-5.0, -5.0), p(415.0, 292.0)),
             plot((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
         );
-        assert_eq!(corners(sheet(&l).unwrap()), [-5.0, -5.0, 415.0, 292.0]);
+        assert_eq!(corners(sheet(&l).unwrap().0), [-5.0, -5.0, 415.0, 292.0]);
+        assert_eq!(sheet(&l).unwrap().1, SheetSource::Limits);
     }
 
     #[test]
@@ -412,23 +504,24 @@ mod tests {
         // printable corner is at the origin, so the paper starts 5 left and
         // 10 below it.
         let l = layout(none, plot((297.0, 210.0), (5.0, 10.0), (0.0, 0.0)));
-        assert_eq!(corners(sheet(&l).unwrap()), [-5.0, -10.0, 292.0, 200.0]);
+        assert_eq!(corners(sheet(&l).unwrap().0), [-5.0, -10.0, 292.0, 200.0]);
         // The usual page setup, origin = minus the margins: the paper's own
         // corner is at the origin.
         let l = layout(none, plot((297.0, 210.0), (5.0, 10.0), (-5.0, -10.0)));
-        assert_eq!(corners(sheet(&l).unwrap()), [0.0, 0.0, 297.0, 210.0]);
+        assert_eq!(corners(sheet(&l).unwrap().0), [0.0, 0.0, 297.0, 210.0]);
+        assert_eq!(sheet(&l).unwrap().1, SheetSource::PlotSettings);
         // Stated portrait and plotted a quarter turned: landscape.
         let mut turned = plot((210.0, 297.0), (0.0, 0.0), (0.0, 0.0));
         turned.rotation = Some(PlotRotation::Clockwise90);
         assert_eq!(
-            corners(sheet(&layout(none, turned)).unwrap()),
+            corners(sheet(&layout(none, turned)).unwrap().0),
             [0.0, 0.0, 297.0, 210.0]
         );
         // In inches, the millimetres are divided by 25.4.
         let mut inches = plot((254.0, 127.0), (0.0, 0.0), (0.0, 0.0));
         inches.paper_units = Some(PlotPaperUnits::Inches);
         assert_eq!(
-            corners(sheet(&layout(none, inches)).unwrap()),
+            corners(sheet(&layout(none, inches)).unwrap().0),
             [0.0, 0.0, 10.0, 5.0]
         );
         // No paper either: no sheet.

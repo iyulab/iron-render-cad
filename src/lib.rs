@@ -37,5 +37,6 @@ pub use png::{
 };
 pub use svg::{
     layout_to_svg, to_svg, Crop, CropReport, Hidden, LayoutError, LeftOut, LeftOutReason, Part,
-    Rect, Scene, Space, TextBox, ToSvgOptions, ToSvgResult, DEFAULT_CAP_HEIGHT,
+    Rect, Scene, SheetSource, Space, TextBox, ToSvgOptions, ToSvgResult, ViewportReport,
+    DEFAULT_CAP_HEIGHT,
 };

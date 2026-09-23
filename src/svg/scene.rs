@@ -14,7 +14,7 @@
 use super::bounds::Box2D;
 use super::{
     infinite, resolve_stroke_widths, sheet, CropReport, Hidden, LayoutError, LeftOutReason,
-    ToSvgOptions,
+    SheetSource, ToSvgOptions, ViewportReport,
 };
 use crate::limits::LimitReport;
 use crate::png::{parse, Fonts, PngError};
@@ -220,6 +220,8 @@ pub struct Scene {
     pub hidden: usize,
     pub undrawn_viewports: Vec<EntityId>,
     pub crop: CropReport,
+    pub viewports: Vec<ViewportReport>,
+    pub sheet: Option<SheetSource>,
     /// Every text drawn, in drawing order; see [`text_boxes`](Self::text_boxes).
     pub(super) texts: Vec<DrawnText>,
 }

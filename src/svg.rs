@@ -42,7 +42,7 @@ mod visibility;
 pub use crop::{Crop, CropReport, LeftOut, LeftOutReason};
 pub use scene::{Part, Rect, Scene, TextBox};
 pub(crate) use sheet::render_layout;
-pub use sheet::LayoutError;
+pub use sheet::{LayoutError, SheetSource, ViewportReport};
 pub use visibility::Hidden;
 
 use crate::color::{effective_layer, resolve_color, DEFAULT_COLOR};
@@ -182,6 +182,15 @@ pub struct ToSvgResult {
     /// How [`view_box`](Self::view_box) was chosen ([`ToSvgOptions::crop`])
     /// and which top-level entities the picture does not show.
     pub crop: CropReport,
+    /// For a layout's sheet ([`layout_to_svg`]): every viewport of the
+    /// layout, in the order its paper space lists them -- the overall one,
+    /// ones that are off and ones on hidden layers included -- with what
+    /// each shows of the model. Always empty for [`to_svg`].
+    pub viewports: Vec<ViewportReport>,
+    /// For a layout's sheet: where the sheet the viewBox frames comes
+    /// from, or `None` when the layout states no sheet and is framed like
+    /// a render of its paper space. Always `None` for [`to_svg`].
+    pub sheet: Option<SheetSource>,
 }
 
 // --- block transform ---------------------------------------------------
@@ -348,6 +357,8 @@ impl<'a> Ctx<'a> {
             hidden: self.hidden,
             undrawn_viewports: Vec::new(),
             crop,
+            viewports: Vec::new(),
+            sheet: None,
             texts: self.texts,
         }
     }
@@ -2593,6 +2604,8 @@ fn svg_result(scene: Scene, stroke_width: Option<f64>) -> ToSvgResult {
         undrawn_viewports: scene.undrawn_viewports,
         view_box: scene.view_box,
         crop: scene.crop,
+        viewports: scene.viewports,
+        sheet: scene.sheet,
     }
 }
 

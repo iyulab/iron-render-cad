@@ -167,6 +167,12 @@ stroke width, and each viewport gets its own copy of the patterns it fills with.
 - Only the model entities whose extent meets the frame are written into a viewport; a RAY or
   XLINE always is, and is cut at the sheet's edge.
 - A perspective view's lens length is not applied: a plan view is parallel.
+- The result says what each viewport of the layout shows (`viewports`): its frame, whether
+  it is the overall viewport, and -- for one the model is drawn through -- the map from the
+  model to the paper it was drawn with and the model window its frame shows (the frame's
+  corners taken back into the model; a twisted view shows a turned rectangle). It also says
+  where the sheet came from (`sheet`: the limits or the plot settings; `None` for a layout
+  framed like a render of its paper space).
 
 ## What the picture shows
 

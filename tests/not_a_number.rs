@@ -174,3 +174,37 @@ fn a_drawing_with_only_real_numbers_reports_nothing() {
     let result = to_svg(&db, all());
     assert!(!result.limits.engaged(), "{:?}", result.limits);
 }
+
+#[test]
+fn a_hatch_boundary_bulge_that_is_not_a_number_leaves_the_hatch_out() {
+    use uncad_model::model::{HatchBoundaryPath, HatchEntity, Point2D, PolylineVertex};
+    let hatch = |id: u64, bulge: f64| {
+        let v = |x, y| PolylineVertex::straight(Point2D { x, y });
+        Entity::Hatch(HatchEntity {
+            common: common(id),
+            boundary_paths: vec![HatchBoundaryPath::Polyline(vec![
+                v(0.0, 0.0),
+                PolylineVertex {
+                    bulge,
+                    ..v(10.0, 0.0)
+                },
+                v(10.0, 10.0),
+            ])],
+            solid_fill: true,
+            gradient: None,
+            pattern_lines: Vec::new(),
+        })
+    };
+    let db = CadDatabase {
+        entities: vec![hatch(0x10, 0.5), hatch(0x11, f64::NAN)],
+        tables: Tables::default(),
+        read_diagnostics: ReadDiagnostics::default(),
+    };
+    let result = to_svg(&db, all());
+    assert!(!result.svg.contains("NaN"), "{}", result.svg);
+    // The sound one is drawn, outline and fill; the other is named.
+    assert_eq!(result.svg.matches("<path ").count(), 1, "{}", result.svg);
+    assert_eq!(result.limits.unreadable_entities, 1, "{:?}", result.limits);
+    assert_eq!(result.limits.dropped[0].id, EntityId::new(0x11));
+    assert_eq!(result.limits.dropped[0].cap, Cap::NotANumber);
+}

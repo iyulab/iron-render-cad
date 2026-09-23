@@ -219,3 +219,110 @@ fn a_far_away_drawing_rasterizes() {
     .expect("the far drawing rasterizes");
     assert!(png.png.starts_with(b"\x89PNG"));
 }
+
+#[test]
+fn every_planar_shape_is_written_about_the_origin_too() {
+    use uncad_model::model::{
+        ArcEntity, CircleEntity, Face3DEntity, LwPolylineEntity, PolylineVertex, SolidEntity,
+    };
+    let up = Point3D {
+        x: 0.0,
+        y: 0.0,
+        z: 1.0,
+    };
+    let down = Point3D { z: -1.0, ..up };
+    let p2 = |x: f64, y: f64| Point2D { x, y };
+    // In a mirror copy's plane a world point (x, y) is written at (-x, y).
+    let polyline = |id, extrusion: Point3D, sign: f64| {
+        Entity::LwPolyline(LwPolylineEntity {
+            common: common(id),
+            vertices: vec![
+                PolylineVertex {
+                    bulge: 1.0,
+                    ..PolylineVertex::straight(p2(sign * (FAR + 30.0), FAR + 30.0))
+                },
+                PolylineVertex::straight(p2(sign * (FAR + 40.0), FAR + 30.0)),
+            ],
+            closed: false,
+            const_width: 0.0,
+            elevation: 0.0,
+            extrusion,
+        })
+    };
+    let at = |x: f64, y: f64| xyz(x, y);
+    let db = CadDatabase {
+        entities: vec![
+            line(0x10, (FAR, FAR), (FAR + 100.0, FAR + 100.0)),
+            Entity::Circle(CircleEntity {
+                common: common(0x11),
+                center: at(-(FAR + 20.0), FAR + 20.0),
+                radius: 5.0,
+                extrusion: down,
+            }),
+            Entity::Arc(ArcEntity {
+                common: common(0x12),
+                center: at(-(FAR + 50.0), FAR + 50.0),
+                radius: 5.0,
+                start_angle: 0.0,
+                end_angle: 1.0,
+                extrusion: down,
+            }),
+            // Tilted: normal (1, 0, 1) / sqrt 2 sends the plane's (x, y) at
+            // height z to the world's ((z - y) / sqrt 2, x).
+            Entity::Circle(CircleEntity {
+                common: common(0x13),
+                center: Point3D {
+                    x: FAR + 60.0,
+                    y: 0.0,
+                    z: (FAR + 60.0) * 2f64.sqrt(),
+                },
+                radius: 5.0,
+                extrusion: Point3D {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+            }),
+            polyline(0x14, up, 1.0),
+            polyline(0x15, down, -1.0),
+            Entity::Solid(SolidEntity {
+                common: common(0x16),
+                corner1: p2(-(FAR + 70.0), FAR + 70.0),
+                corner2: p2(-(FAR + 80.0), FAR + 70.0),
+                corner3: p2(-(FAR + 70.0), FAR + 80.0),
+                corner4: p2(-(FAR + 80.0), FAR + 80.0),
+                elevation: 0.0,
+                extrusion: down,
+            }),
+            Entity::Face3D(Face3DEntity {
+                common: common(0x17),
+                corner1: at(FAR + 80.0, FAR + 10.0),
+                corner2: at(FAR + 90.0, FAR + 10.0),
+                corner3: at(FAR + 90.0, FAR + 20.0),
+                corner4: at(FAR + 80.0, FAR + 20.0),
+                invisible_edges: [false, true, false, false],
+            }),
+        ],
+        tables: Tables::default(),
+        read_diagnostics: ReadDiagnostics::default(),
+    };
+    let result = to_svg(&db, all());
+    assert!(
+        result.origin.x > FAR && result.origin.y > FAR,
+        "{:?}",
+        result.origin
+    );
+    let largest = numbers(&result.svg)
+        .into_iter()
+        .map(f64::abs)
+        .fold(0.0, f64::max);
+    assert!(
+        largest < 1000.0,
+        "a number of {largest} reached the SVG: {}",
+        result.svg
+    );
+    // Each shape is drawn, as the shape it is.
+    assert_eq!(result.svg.matches("<circle ").count(), 1, "{}", result.svg);
+    assert_eq!(result.svg.matches(" A ").count(), 3, "{}", result.svg);
+    assert!(!result.limits.engaged(), "{:?}", result.limits);
+}

@@ -1,6 +1,7 @@
 //! What a curved entity counts towards the picture's extent is its own box:
-//! an arc's, not its whole circle's; the ellipse arc that is drawn, not the
-//! whole ellipse; and a circle inside a rotated block all of itself.
+//! an arc's, not its whole circle's, mirrored or not; the ellipse arc that is
+//! drawn, not the whole ellipse; and a circle or a polyline's arc inside a
+//! rotated block all of itself.
 //!
 //! Every expected number is worked out from the geometry, not read off this
 //! crate's output. The viewBox is the extent (padding 0, no outlier trim),
@@ -13,7 +14,8 @@ use iron_render_cad::limits::Cap;
 use iron_render_cad::{to_svg, Space, ToSvgOptions};
 use uncad_model::model::{
     ArcEntity, CircleEntity, Confidence, EllipseEntity, Entity, EntityCommon, EntityId,
-    InsertEntity, LineEntity, Origin, Point3D, PointEntity, Ref,
+    InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D, PointEntity,
+    PolylineVertex, Ref,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
@@ -240,4 +242,69 @@ fn a_point_counts_itself_not_the_cross_it_is_drawn_as() {
         }),
     ];
     close(extent(entities, BTreeMap::new()), [0.0, 0.0, 10.0, 5.0]);
+}
+
+#[test]
+fn a_mirrored_arc_counts_its_own_box_not_its_whole_circle() {
+    // A quarter from 0 to 90 degrees about the origin, in a mirror copy's
+    // plane: in the world it runs clockwise from (-10, 0) to (0, 10), and
+    // its box is the quarter's, not the circle's 20 x 20.
+    let Entity::Arc(mut mirrored) = arc(0x10, 0.0, FRAC_PI_2) else {
+        unreachable!()
+    };
+    mirrored.extrusion = xyz(0.0, 0.0, -1.0);
+    close(
+        extent(vec![Entity::Arc(mirrored)], BTreeMap::new()),
+        [-10.0, 0.0, 0.0, 10.0],
+    );
+}
+
+#[test]
+fn a_bulged_polyline_in_a_rotated_block_counts_all_of_its_arc() {
+    // A half circle of radius 1 from (-1, 0) to (1, 0) through (0, -1)
+    // (bulge 1), inside a block placed at (5, 5) and turned 45 degrees. In
+    // the world the arc reaches x = 6 and y = 4, which none of its ends or
+    // its local extreme reach; its local box, [-1, 1] x [-1, 0], turned,
+    // contains it.
+    let mut blocks = BTreeMap::new();
+    blocks.insert(
+        "P".to_string(),
+        BlockRecord {
+            name: "P".to_string(),
+            entities: vec![Entity::LwPolyline(LwPolylineEntity {
+                common: common(0x50),
+                vertices: vec![
+                    PolylineVertex {
+                        point: Point2D { x: -1.0, y: 0.0 },
+                        bulge: 1.0,
+                        ..PolylineVertex::default()
+                    },
+                    PolylineVertex::straight(Point2D { x: 1.0, y: 0.0 }),
+                ],
+                closed: false,
+                const_width: 0.0,
+                elevation: 0.0,
+                extrusion: xyz(0.0, 0.0, 1.0),
+            })],
+        },
+    );
+    let insert = Entity::Insert(InsertEntity {
+        common: common(0x10),
+        block_name: Ref::Resolved("P".to_string()),
+        insertion_point: xyz(5.0, 5.0, 0.0),
+        scale: xyz(1.0, 1.0, 1.0),
+        rotation: FRAC_PI_4,
+        attribs: Vec::new(),
+        extrusion: xyz(0.0, 0.0, 1.0),
+    });
+    let [min_x, min_y, max_x, max_y] = extent(vec![insert], blocks);
+    let h = std::f64::consts::FRAC_1_SQRT_2;
+    assert!(min_x <= 5.0 - h + 1e-9 && max_x >= 6.0, "{min_x} {max_x}");
+    assert!(min_y <= 4.0 && max_y >= 5.0 + h - 1e-9, "{min_y} {max_y}");
+    // Exactly the turned box's: its corners (1, -1) and (-1, -1) land at
+    // x = 5 + sqrt 2 and y = 5 - sqrt 2.
+    close(
+        [min_x, min_y, max_x, max_y],
+        [5.0 - h, 5.0 - 2f64.sqrt(), 5.0 + 2f64.sqrt(), 5.0 + h],
+    );
 }

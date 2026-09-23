@@ -198,3 +198,35 @@ fn a_normal_that_is_not_a_number_leaves_the_entity_out_and_says_so() {
     assert!(!result.svg.contains("<circle"), "{}", result.svg);
     assert_eq!(result.limits.unreadable_entities, 1);
 }
+
+#[test]
+fn a_mirrored_entitys_height_that_is_not_a_number_leaves_it_out_and_says_so() {
+    // Mirrored, the height moves nothing in plan, but it is part of the
+    // arithmetic that takes the plane to the world: drawn, it would write
+    // NaN. In the world's own plane it is not used, and the circle is drawn.
+    let mirrored = render_one(circle(
+        Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: -1.0,
+        },
+        f64::NAN,
+    ));
+    assert!(!mirrored.svg.contains("NaN"), "{}", mirrored.svg);
+    assert!(!mirrored.svg.contains("<circle"), "{}", mirrored.svg);
+    assert_eq!(mirrored.limits.unreadable_entities, 1);
+    let world = render_one(circle(
+        Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
+        f64::NAN,
+    ));
+    assert!(
+        world.svg.contains("<circle cx=\"0\" cy=\"0\" r=\"10\""),
+        "{}",
+        world.svg
+    );
+    assert!(!world.limits.engaged());
+}

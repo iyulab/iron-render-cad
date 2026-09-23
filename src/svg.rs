@@ -3063,6 +3063,76 @@ mod tests {
         }
     }
 
+    fn polygon_points(svg: &str, tag: &str) -> Vec<(f64, f64)> {
+        svg.split(&format!("<{tag} points=\""))
+            .nth(1)
+            .unwrap_or_else(|| panic!("a {tag}: {svg}"))
+            .split('"')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|pair| {
+                let (x, y) = pair.split_once(',').unwrap();
+                (x.parse().unwrap(), y.parse().unwrap())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_tilted_arc_whose_angles_are_turns_apart_goes_round_once_at_most() {
+        // From 0 to a quarter turn past two whole turns: the same directions
+        // as a quarter turn, and drawn through as many points -- not round
+        // the circle twice more, nor through points a stored angle of any
+        // size could multiply.
+        use std::f64::consts::{FRAC_PI_2, TAU};
+        let tilted_arc = |end: f64| {
+            render_one(Entity::Arc(ArcEntity {
+                common: plain_common(),
+                center: Point3D {
+                    x: 2.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                radius: 1.0,
+                start_angle: 0.0,
+                end_angle: end,
+                extrusion: Point3D {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+            }))
+        };
+        let quarter = polygon_points(&tilted_arc(FRAC_PI_2), "polyline");
+        let wound = polygon_points(&tilted_arc(2.0 * TAU + FRAC_PI_2), "polyline");
+        assert_eq!(quarter.len(), 17);
+        assert_eq!(wound.len(), quarter.len());
+        for (a, b) in quarter.iter().zip(&wound) {
+            assert!((a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn an_arc_too_flat_to_draw_is_its_chord_on_a_tilted_plane_too() {
+        // A bulge of 1e-160 over ten units: sampled on its arc, every point
+        // would be reckoned from a center some 1e160 away.
+        let mut e = polyline(&[(0.0, 0.0, 1e-160), (10.0, 0.0, 0.0)], false);
+        if let Entity::LwPolyline(p) = &mut e {
+            p.extrusion = Point3D {
+                x: 1.0,
+                y: 0.0,
+                z: 1.0,
+            };
+        }
+        let svg = render_one(e);
+        // The two vertices, seen from above: (0, 0) and (0, 10).
+        assert_eq!(
+            polygon_points(&svg, "polyline"),
+            [(0.0, 0.0), (0.0, -10.0)],
+            "{svg}"
+        );
+    }
+
     fn leader(has_arrowhead: Option<bool>) -> Entity {
         use uncad_model::model::{LeaderAnnotation, LeaderEntity, Ref};
         let p = |x| Point3D { x, y: 0.0, z: 0.0 };

@@ -398,6 +398,26 @@ mod tests {
     }
 
     #[test]
+    fn a_polyline_boundarys_arc_too_flat_to_draw_is_its_chord() {
+        // A bulge of 1e-160 over two units: a point sampled on its arc would
+        // be reckoned from a center some 1e160 away.
+        let v = |x, y, bulge| PolylineVertex {
+            point: Point2D { x, y },
+            bulge,
+            ..PolylineVertex::default()
+        };
+        let pts = polyline_path_points(&[v(0.0, 0.0, 1e-160), v(2.0, 0.0, 0.0), v(2.0, 2.0, 0.0)]);
+        assert_eq!(
+            pts,
+            [
+                Point2D { x: 0.0, y: 0.0 },
+                Point2D { x: 2.0, y: 0.0 },
+                Point2D { x: 2.0, y: 2.0 }
+            ]
+        );
+    }
+
+    #[test]
     fn edge_points_line_is_a_single_point() {
         let pts = edge_points(&HatchEdge::Line {
             start: Point2D { x: 1.0, y: 2.0 },

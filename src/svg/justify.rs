@@ -14,7 +14,9 @@
 use super::format::{clean, escape_xml, neg, rotate_transform_attr, Frame};
 use super::Ctx;
 use std::fmt::Write as _;
-use uncad_model::model::{HorizontalJustification, Point2D, VerticalJustification};
+use uncad_model::model::{
+    HorizontalJustification, MTextAttachment, Point2D, VerticalJustification,
+};
 
 /// How far a text's descenders reach below its baseline, in ems: 0.2, a
 /// Latin `p` or `g` in the common sans-serif faces. A text justified to its
@@ -229,6 +231,73 @@ pub(super) fn consider_text_box(layout: &TextLayout, text: &str, ctx: &mut Ctx) 
     let [a, b, c, d] = layout.axes;
     for (u, v) in [(u0, v0), (u1, v0), (u1, v1), (u0, v1)] {
         ctx.consider(at.x + a * u + c * v, at.y + b * u + d * v);
+    }
+}
+
+/// How big an MTEXT's block is, for its box: as wide and as tall as the
+/// application that wrote the file measured it (DXF 42/43), when the file
+/// says; otherwise as wide as its reference rectangle (DXF 41), which the
+/// text is wrapped to, when it has one, else [`CHAR_ADVANCE_EM`] per
+/// character of its longest line; and as tall as the lines are drawn --
+/// the first line's capitals down to the last baseline, `block` -- when no
+/// height is stated.
+pub(super) struct MTextBlock {
+    pub(super) width: f64,
+    pub(super) height: f64,
+}
+
+impl MTextBlock {
+    pub(super) fn new(
+        extents: (Option<f64>, Option<f64>),
+        rect_width: f64,
+        longest_line: usize,
+        text_height: f64,
+        block: f64,
+        cap_height: f64,
+    ) -> MTextBlock {
+        let stated = |v: Option<f64>| v.filter(|v| v.is_finite() && *v > 0.0);
+        let width = stated(extents.0)
+            .or(stated(Some(rect_width)))
+            .unwrap_or(CHAR_ADVANCE_EM / cap_height * text_height * longest_line as f64);
+        MTextBlock {
+            width,
+            height: stated(extents.1).unwrap_or(block),
+        }
+    }
+}
+
+/// Counts an MTEXT's box towards the extent, with its insertion point: the
+/// block hung from the insertion point the way the text is drawn from it --
+/// the attachment's column says which of its left edge, middle or right
+/// edge the point is on, its row which of its top, middle or bottom, and a
+/// block with no stated attachment has its first baseline on the point
+/// (`text_height` below the block's top) and runs right -- turned by the
+/// text's rotation about the point.
+pub(super) fn consider_mtext_box(
+    at: Point2D,
+    rotation: f64,
+    attachment: Option<MTextAttachment>,
+    block: &MTextBlock,
+    text_height: f64,
+    ctx: &mut Ctx,
+) {
+    use MTextAttachment as A;
+    ctx.consider(at.x, at.y);
+    let (w, h) = (block.width, block.height);
+    let (u0, u1) = match attachment {
+        Some(A::TopCenter | A::MiddleCenter | A::BottomCenter) => (-w / 2.0, w / 2.0),
+        Some(A::TopRight | A::MiddleRight | A::BottomRight) => (-w, 0.0),
+        _ => (0.0, w),
+    };
+    let (v0, v1) = match attachment {
+        None => (text_height - h, text_height),
+        Some(A::TopLeft | A::TopCenter | A::TopRight) => (-h, 0.0),
+        Some(A::MiddleLeft | A::MiddleCenter | A::MiddleRight) => (-h / 2.0, h / 2.0),
+        Some(A::BottomLeft | A::BottomCenter | A::BottomRight) => (0.0, h),
+    };
+    let (sin, cos) = rotation.sin_cos();
+    for (u, v) in [(u0, v0), (u1, v0), (u1, v1), (u0, v1)] {
+        ctx.consider(at.x + cos * u - sin * v, at.y + sin * u + cos * v);
     }
 }
 

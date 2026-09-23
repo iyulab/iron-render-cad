@@ -64,7 +64,13 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **MTEXT is placed by its attachment point**, one line per paragraph, with the lines 5/3
   of the text height apart times the spacing factor (AutoCAD's single spacing) -- real line
   breaks and glyph metrics depend on the font. Where the drawing does not state the
-  attachment, the insertion point is used as the first line's baseline.
+  attachment, the insertion point is used as the first line's baseline. A paragraph is not
+  wrapped to the MTEXT's reference rectangle.
+- **An MTEXT's extent is its block**: as wide and tall as the file states it (the extents,
+  DXF 42/43, that the writing application measured), else as wide as its reference rectangle
+  (DXF 41) and as tall as its lines are drawn, else estimated from its lines at 0.6 em per
+  character -- hung from the insertion point by its attachment and turned by its rotation,
+  the way the text is drawn.
 - **Text height is the height of the capitals, in an assumed face**: a text of height `h`
   is written at `font-size = h / cap_height`, where `ToSvgOptions::cap_height` is the
   capital height of the face it will be drawn in as a fraction of the em -- 0.7 by default,

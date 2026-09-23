@@ -38,7 +38,7 @@ use crate::limits::{
 use crate::text::{decode_mtext, decode_text};
 use bounds::{bbox_of, dominant_cluster_box, Box2D};
 use format::{clean, escape_xml, neg, xy, Frame};
-use justify::{Anchor, TextLayout};
+use justify::{Anchor, MTextBlock, TextLayout};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -998,7 +998,14 @@ fn numbers_are_real(e: &Entity) -> bool {
             p3(&t.insertion_point) && t.text_height.is_none_or(|h| h.is_finite())
         }
         Entity::MText(m) => {
-            p3(&m.insertion_point) && real(&[m.text_height, m.rotation, m.line_spacing_factor])
+            p3(&m.insertion_point)
+                && real(&[
+                    m.text_height,
+                    m.rotation,
+                    m.line_spacing_factor,
+                    m.rect_width,
+                ])
+                && real(&[m.extents_width, m.extents_height].map(|v| v.unwrap_or(0.0)))
         }
         Entity::Point(p) => p3(&p.position),
         Entity::Solid(s) | Entity::Trace(s) => {
@@ -1360,7 +1367,10 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::MText(m) => {
-            ctx.consider(m.insertion_point.x, m.insertion_point.y);
+            let at = Point2D {
+                x: m.insertion_point.x,
+                y: m.insertion_point.y,
+            };
             let decoded = decode_mtext(&m.text);
             // An empty line is a real line: `\P\P` is how a note spaces its
             // paragraphs, and it takes up its line height.
@@ -1369,6 +1379,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 .map(|l| l.strip_suffix('\r').unwrap_or(l))
                 .collect();
             if lines.iter().all(|l| l.is_empty()) {
+                ctx.consider(at.x, at.y);
                 return Some(String::new());
             }
             // A stored 0 means "unset" at render time (the parsed value is
@@ -1380,6 +1391,15 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 m.line_spacing_factor
             };
             let line_height = text_height * line_spacing_factor * MTEXT_LINE_SPACING;
+            let block = MTextBlock::new(
+                (m.extents_width, m.extents_height),
+                m.rect_width,
+                lines.iter().map(|l| l.chars().count()).max().unwrap_or(0),
+                text_height,
+                text_height + line_height * lines.len().saturating_sub(1) as f64,
+                ctx.cap_height,
+            );
+            justify::consider_mtext_box(at, m.rotation, m.attachment, &block, text_height, ctx);
             let font_size = text_height / ctx.cap_height;
             let (x, y) = (frame.x(m.insertion_point.x), frame.y(m.insertion_point.y));
             let (anchor, first_baseline) =

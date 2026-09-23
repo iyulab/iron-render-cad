@@ -2,18 +2,25 @@
 //! characters they stand for.
 //!
 //! The model carries text as the file wrote it; this is where it is read.
-//! Two families are handled, in one pass so that what one produces is never
-//! read again as the other:
+//! Three families are handled, in one pass so that what one produces is
+//! never read again as another:
 //!
 //! - **Percent codes**, in TEXT, ATTRIB and MTEXT: `%%d` (degree), `%%p`
 //!   (plus-minus), `%%c` (diameter), `%%%` (a percent sign), `%%nnn` (the
 //!   character with that three-digit code); `%%u` / `%%o` switch underline /
-//!   overline, which is not drawn, so they are dropped. Any other `%%x` is
-//!   left as written.
+//!   overline, which is not drawn, so they are dropped. Codes 127, 128 and
+//!   129 are where the standard shape fonts keep the degree, plus-minus and
+//!   diameter signs (dimension text writes `90%%127` for 90 degrees), so
+//!   they are read as those signs; a code naming any other control
+//!   character, which drawn text cannot carry, is left as written, as is
+//!   any other `%%x`.
+//! - **Unicode escapes**, in any text: `\U+XXXX` is the Unicode character --
+//!   the way a DXF file writes a character its code page cannot hold, in
+//!   every string and not only in MTEXT. Outside MTEXT no other backslash
+//!   starts a code.
 //! - **MTEXT formatting codes**: `\P` (paragraph) and `\N` (column) break the
 //!   line; `\~` is a non-breaking space; `\\`, `\{` and `\}` are the
-//!   characters; `\U+XXXX` is the Unicode character; `\S…;` is stacked text,
-//!   drawn inline as `top/bottom`; codes that take a value up to `;` (`\A`,
+//!   characters; `\S…;` is stacked text, drawn inline as `top/bottom`; codes that take a value up to `;` (`\A`,
 //!   `\C`, `\c`, `\F`, `\f`, `\H`, `\Q`, `\T`, `\W`, `\p`) and the one-letter
 //!   switches (`\L`, `\l`, `\O`, `\o`, `\K`, `\k`) change only how text looks
 //!   and are dropped, as are `{` / `}` grouping. `\M+nXXXX` (a character in
@@ -23,7 +30,8 @@
 //! What is drawn is plain text -- fonts, colors, heights and stacking are
 //! not reproduced.
 
-/// `text` with its percent codes read, and, for MTEXT, its formatting codes.
+/// `text` with its percent codes and Unicode escapes read, and, for MTEXT,
+/// its formatting codes.
 pub(super) fn decode(text: &str, mtext: bool) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::with_capacity(text.len());
@@ -33,6 +41,13 @@ pub(super) fn decode(text: &str, mtext: bool) -> String {
         if c == '%' && chars.get(i + 1) == Some(&'%') {
             i += 2 + percent_code(&chars[i + 2..], &mut out);
             continue;
+        }
+        if c == '\\' && !mtext && chars.get(i + 1) == Some(&'U') {
+            if let Some(ch) = unicode_escape(&chars[i + 2..]) {
+                out.push(ch);
+                i += 7;
+                continue;
+            }
         }
         if mtext {
             match c {
@@ -65,8 +80,9 @@ fn percent_code(rest: &[char], out: &mut String) -> usize {
         Some(d) if d.is_ascii_digit() => {
             let digits: String = rest.iter().take(3).collect();
             match (digits.len() == 3 && digits.chars().all(|d| d.is_ascii_digit()))
-                .then(|| digits.parse::<u32>().ok().and_then(char::from_u32))
+                .then(|| digits.parse::<u32>().ok())
                 .flatten()
+                .and_then(shape_font_char)
             {
                 Some(ch) => {
                     out.push(ch);
@@ -135,6 +151,19 @@ fn mtext_code(rest: &[char], out: &mut String) -> usize {
     1
 }
 
+/// The character a `%%nnn` code draws: the standard shape fonts' degree,
+/// plus-minus and diameter signs at 127, 128 and 129, otherwise the
+/// character with that code -- unless it is a control character, which
+/// has no place in drawn text.
+fn shape_font_char(code: u32) -> Option<char> {
+    match code {
+        127 => Some('\u{b0}'),
+        128 => Some('\u{b1}'),
+        129 => Some('\u{2300}'),
+        _ => char::from_u32(code).filter(|c| !c.is_control()),
+    }
+}
+
 /// `+XXXX` (four hex digits) as the character it names.
 fn unicode_escape(rest: &[char]) -> Option<char> {
     if rest.first() != Some(&'+') || rest.len() < 5 {
@@ -200,5 +229,25 @@ mod tests {
     #[test]
     fn plain_text_is_not_read_as_mtext() {
         assert_eq!(decode(r"\P{x}", false), r"\P{x}");
+        assert_eq!(decode(r"C:\\PATH", false), r"C:\\PATH");
+    }
+
+    #[test]
+    fn a_unicode_escape_is_its_character_in_plain_text_too() {
+        // An older DXF file writes a character its code page cannot hold
+        // this way in every string, TEXT and ATTRIB included.
+        assert_eq!(decode(r"\U+2205 20", false), "\u{2205} 20");
+        assert_eq!(decode(r"\U+04100", false), "\u{410}0");
+        assert_eq!(decode(r"\U+12", false), r"\U+12");
+    }
+
+    #[test]
+    fn the_shape_font_codes_are_degree_plus_minus_and_diameter() {
+        // As dimension text writes them.
+        assert_eq!(decode("90%%127", false), "90\u{b0}");
+        assert_eq!(decode("%%1292.0000", false), "\u{2300}2.0000");
+        assert_eq!(decode("%%128", false), "\u{b1}");
+        // A control character cannot be drawn: the code stays as written.
+        assert_eq!(decode("a%%001b", false), "a%%001b");
     }
 }

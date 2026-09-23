@@ -2671,13 +2671,14 @@ fn view_box_of(bounds: &Box2D, padding: f64, origin: Point2D) -> ViewBox {
 ///
 /// The viewBox is the rectangle [`ToSvgOptions::crop`] chooses (by default
 /// the dominant spatially-connected cluster of entities rather than the raw
-/// min/max -- see [`bounds`] for why), padded; the entities it does not show
-/// are in [`ToSvgResult::crop`], and an outlier [`Crop::Guarded`] sets aside
-/// is not drawn at all.
+/// min/max, so that a stray far-off entity does not shrink the drawing to a
+/// dot), padded; the entities it does not show are in
+/// [`ToSvgResult::crop`], and an outlier [`Crop::Guarded`] sets aside is not
+/// drawn at all.
 ///
 /// `stroke_width` defaults to ~1/6000th of the computed viewBox diagonal
-/// rather than a fixed value; see [`stroke_width_placeholder`] for how nested
-/// block references keep a constant visual weight.
+/// rather than a fixed value, and nested block references keep a constant
+/// visual weight whatever they are scaled by.
 pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
     svg_result(render(db, options), options.stroke_width)
 }
@@ -3754,5 +3755,101 @@ mod tests {
             z: 1.0,
         };
         assert!(render_one(Entity::Ellipse(el)).contains("<path d=\"M"));
+    }
+
+    #[test]
+    fn an_arc_so_flat_its_radius_passes_the_world_is_not_drawable() {
+        // A bulge of 1e-160 over ten units: a radius of about 6e160.
+        let flat = BulgeArc::between(
+            Point2D { x: 0.0, y: 0.0 },
+            Point2D { x: 10.0, y: 5.0 },
+            1e-160,
+        )
+        .unwrap();
+        assert!(!arc_drawable(&flat), "{flat:?}");
+        let half =
+            BulgeArc::between(Point2D { x: 0.0, y: 0.0 }, Point2D { x: 2.0, y: 0.0 }, 1.0).unwrap();
+        assert!(arc_drawable(&half));
+    }
+
+    #[test]
+    fn a_plane_seen_from_above_at_a_height() {
+        // Normal (1, 0, 0): a point (x, y) at height z is the world point
+        // (z, x, y) -- seen from above, (z, x).
+        let m = plane_seen_from_above(
+            Ocs::of(Point3D {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            })
+            .unwrap(),
+            7.0,
+        );
+        let q = m.apply(Point2D { x: 2.0, y: 3.0 });
+        assert!(
+            (q.x - 7.0).abs() < 1e-12 && (q.y - 2.0).abs() < 1e-12,
+            "{q:?}"
+        );
+    }
+
+    #[test]
+    fn a_flat_plane_seen_from_above_is_the_models_placement() {
+        use uncad_model::model::InsertEntity;
+        // An INSERT at the plane's origin, unscaled and unturned, is placed
+        // by exactly the plane's map wherever the model places it at all:
+        // the renderer's view and the model's placement cannot disagree.
+        for normal in [
+            Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: -1.0,
+            },
+            Point3D {
+                x: 1e-17,
+                y: 0.0,
+                z: 1.0,
+            },
+        ] {
+            let insert = InsertEntity {
+                common: plain_common(),
+                block_name: Ref::Absent,
+                insertion_point: Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 2.5,
+                },
+                scale: Point3D {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                rotation: 0.0,
+                attribs: Vec::new(),
+                extrusion: normal,
+            };
+            let model = insert.world_transform().expect("a flat plane");
+            let ours = plane_seen_from_above(Ocs::of(normal).unwrap(), 2.5);
+            for (a, b) in [
+                (model.a, ours.a),
+                (model.b, ours.b),
+                (model.c, ours.c),
+                (model.d, ours.d),
+                (model.e, ours.e),
+                (model.f, ours.f),
+            ] {
+                assert!((a - b).abs() < 1e-12, "{normal:?}: {model:?} vs {ours:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_planes_height_has_to_be_a_number_unless_the_plane_is_the_worlds() {
+        let p3 = |x, y, z| Point3D { x, y, z };
+        assert!(plane_numbers_are_real(&p3(0.0, 0.0, 1.0), f64::NAN));
+        // Mirrored, the height adds nothing in plan -- but it is multiplied
+        // in, and a NaN reaches the point.
+        assert!(!plane_numbers_are_real(&p3(0.0, 0.0, -1.0), f64::NAN));
+        assert!(!plane_numbers_are_real(&p3(1.0, 0.0, 1.0), f64::NAN));
+        assert!(!plane_numbers_are_real(&p3(0.0, f64::INFINITY, 1.0), 0.0));
     }
 }

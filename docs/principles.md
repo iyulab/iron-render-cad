@@ -46,7 +46,7 @@ The crate is in 0.x. When a more correct design is found, a breaking change is t
 
 | Just do it | Propose first | Discuss before any work |
 |---|---|---|
-| Tests · bug fixes and refactors that leave the public API unchanged · docs · support for another entity type | Public API changes · new dependencies · changes to the overlay's visual language | Anything that adds inference · anything in "What it is not" · copyleft dependencies · changes to how confidence is shown |
+| Tests · bug fixes and refactors that leave the public API unchanged · docs · support for another entity type · a new field on a result the library returns | Public API changes · new dependencies · changes to the overlay's visual language | Anything that adds inference · anything in "What it is not" · copyleft dependencies · changes to how confidence is shown |
 
 If it is unclear which column a change falls in, treat it as the stricter one.
 

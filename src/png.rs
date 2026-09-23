@@ -1,7 +1,7 @@
-//! SVG -> PNG rasterization, layered on top of [`crate::svg::to_svg`]'s
-//! output via resvg/usvg/tiny-skia (all pure Rust, no system library
-//! dependency -- see [`crate::svg`]'s own doc comment for the CAD -> SVG
-//! side; this module only handles the SVG -> PNG raster step).
+//! SVG -> PNG rasterization, layered on top of the SVG renderer
+//! ([`crate::to_svg`]) via resvg/usvg/tiny-skia (all pure Rust, no system
+//! library dependency). This module chooses the pixel size, the stroke
+//! width in pixels, the fonts and the background, and runs the raster step.
 //!
 //! A single `resvg` dependency is used rather than separate `usvg` /
 //! `tiny-skia` / `fontdb` crates: `resvg` re-exports both (`resvg::usvg`,
@@ -254,15 +254,15 @@ impl std::fmt::Display for PngError {
 }
 impl std::error::Error for PngError {}
 
-/// Renders `db` straight to PNG bytes, via [`to_svg`] internally -- the
-/// intermediate SVG text never touches disk.
+/// Renders `db` straight to PNG bytes: the drawing [`crate::to_svg`] would
+/// write, drawn at the size, stroke width, fonts and background `options`
+/// ask for. The intermediate SVG text never touches disk.
 ///
-/// Fonts come from the host's installed system fonts, loaded fresh on every
-/// call (`fontdb::Database::load_system_fonts`, matching this crate having
-/// no bundled font of its own). A host with no matching font installed
-/// renders `<text>` entities (dimension/MTEXT labels) as blank rather than
-/// erroring -- usvg treats an unresolved glyph as empty, not a parse
-/// failure.
+/// Text is drawn with `options.fonts` -- by default the host's installed
+/// fonts, scanned once per process; this crate bundles none. A host with no
+/// matching font renders `<text>` entities (dimension/MTEXT labels) as blank
+/// rather than erroring -- usvg treats an unresolved glyph as empty, not a
+/// parse failure.
 pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, PngError> {
     let rendered = svg::render(db, options.svg);
     let [_, _, width, height] = rendered.view_box;
@@ -298,8 +298,8 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
 /// Rasterizes an already-built SVG string to PNG bytes at `scale`x the
 /// SVG's own viewBox-derived size. Split out from [`to_png`] so a caller
 /// that already has an SVG string (e.g. from a separately cached
-/// [`to_svg`] call) doesn't have to re-render the CAD geometry to get a
-/// PNG out of it.
+/// [`crate::to_svg`] call) doesn't have to re-render the CAD geometry to get
+/// a PNG out of it.
 ///
 /// Neither side of the image may exceed [`DEFAULT_MAX_EDGE`] pixels; a
 /// larger request fails with [`PngError::TooLarge`] instead of allocating.

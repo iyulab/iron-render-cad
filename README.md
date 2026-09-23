@@ -21,7 +21,7 @@ Input is expressed in the [uncad-model](https://github.com/iyulab/uncad-model) e
 
 ## Status
 
-0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything), report the entity types they could not draw and the block references that drew nothing, and are deterministic byte for byte. The overlay (change set on top of the original) is not implemented yet. The design principles are
+0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything), report the entity types they could not draw, the block references that drew nothing and what the bounds on the file's numbers left out, and are deterministic byte for byte. A malformed drawing may cost a missing entity and a note saying so, never the process. The overlay (change set on top of the original) is not implemented yet. The design principles are
 in [docs/principles.md](docs/principles.md); what is approximated and what is unverified is in
 [docs/CAVEATS.md](docs/CAVEATS.md).
 

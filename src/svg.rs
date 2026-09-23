@@ -12,7 +12,9 @@
 //! `docs/CAVEATS.md` for the full picture.
 //!
 //! Layout of this module: options and results, the block transform, the
-//! rendering context, per-entity rendering, then [`to_svg`] itself.
+//! rendering context, per-entity rendering, then the top level -- `render`
+//! (walk and measure), `assemble` (resolve the placeholders into a
+//! document) and [`to_svg`], which runs the two.
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
 //! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
 //! [`infinite`] (RAY and XLINE, cut to the picture once the viewBox is

@@ -12,8 +12,8 @@ use std::collections::BTreeMap;
 use iron_render_cad::limits::Cap;
 use iron_render_cad::{to_png, to_svg, Space, ToPngOptions, ToSvgOptions};
 use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity, HatchPatternLine,
-    InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D, Ref,
+    CircleEntity, Confidence, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity,
+    HatchPatternLine, InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D, Ref,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
@@ -316,4 +316,67 @@ fn a_hatch_whose_pattern_tile_dwarfs_the_shape_keeps_only_its_outline() {
     )
     .expect("the outline rasterizes");
     assert_eq!(png.limits.hatch_patterns_dropped, 1);
+}
+
+/// The four numbers of the SVG's `viewBox` attribute.
+fn view_box(svg: &str) -> [f64; 4] {
+    let start = svg.find("viewBox=\"").expect("a viewBox") + "viewBox=\"".len();
+    let end = svg[start..].find('"').expect("closed attribute") + start;
+    let parts: Vec<f64> = svg[start..end]
+        .split_whitespace()
+        .map(|n| n.parse().expect("a number"))
+        .collect();
+    parts.try_into().expect("four numbers")
+}
+
+#[test]
+fn an_entity_reaching_absurdly_far_does_not_take_the_viewbox_with_it() {
+    // 1e150 and a radius of 1e16 are finite, so the screen for NaN does not
+    // see them; but the viewBox, the stroke width and every dash length are
+    // built from the extent. Both are left out and named; the picture is
+    // the sane line's own.
+    let drawing = db(
+        vec![
+            line(0x40, 0.0, 0.0),
+            Entity::Line(LineEntity {
+                common: common(0x41),
+                start_point: xyz(0.0, 0.0),
+                end_point: xyz(1e150, 1e150),
+            }),
+            Entity::Circle(CircleEntity {
+                common: common(0x42),
+                center: xyz(5.0, 5.0),
+                radius: 1e16,
+            }),
+        ],
+        Vec::new(),
+    );
+
+    let result = to_svg(
+        &drawing,
+        ToSvgOptions {
+            outlier_trim: false,
+            ..all()
+        },
+    );
+
+    assert_eq!(result.svg.matches("<line ").count(), 1, "{}", result.svg);
+    assert!(!result.svg.contains("<circle"));
+    let [_, _, width, height] = view_box(&result.svg);
+    assert!(width < 100.0 && height < 100.0, "{width} x {height}");
+    assert_eq!(
+        result.limits.out_of_range_entities, 2,
+        "{:?}",
+        result.limits
+    );
+    let named: Vec<(u64, Cap)> = result
+        .limits
+        .dropped
+        .iter()
+        .map(|d| (d.id.value(), d.cap))
+        .collect();
+    assert_eq!(
+        named,
+        vec![(0x41, Cap::OutOfRange), (0x42, Cap::OutOfRange)]
+    );
 }

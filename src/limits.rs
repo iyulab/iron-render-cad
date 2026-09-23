@@ -70,6 +70,18 @@ pub(crate) const MAX_ENTITY_POINTS: usize = 100_000;
 /// anyway, so the pattern is dropped and the hatch keeps its outline.
 pub(crate) const MAX_HATCH_TILE_SPAN: f64 = 16.0;
 
+/// How far from the origin, in drawing units, an entity's measured extent
+/// may reach on either axis.
+///
+/// 1e150 is a finite number, so the screen for `NaN` does not see it, but
+/// the viewBox is built from the extents and the stroke width, the padding
+/// and every dash length are derived from the viewBox: in a fuzzed
+/// `example_2000.dwg`, one entity reaching 1e150 made a viewBox 1.45e150
+/// units wide, and rasterizing its dashed strokes asked for ~1e149 dashes. No real drawing comes near the bound --
+/// the Earth's circumference in micrometres is 4e13 -- so an entity past it
+/// is not drawn and does not count towards the extent.
+pub(crate) const MAX_WORLD_COORDINATE: f64 = 1e15;
+
 /// How many entities [`LimitReport::dropped`] names before it stops
 /// collecting. The counts stay exact past it; only the naming stops.
 const MAX_NAMED: usize = 100;
@@ -97,6 +109,10 @@ pub enum Cap {
     /// A coordinate, size or angle the entity is drawn from is not a real
     /// number (`NaN`, infinite). It is not drawn.
     NotANumber,
+    /// The entity's extent reaches more than 1e15 drawing units from the
+    /// origin, past what a viewBox can be built from. It is not drawn and
+    /// does not count towards the extent.
+    OutOfRange,
 }
 
 /// One entity a cap acted on, so a report can name what is missing instead
@@ -142,6 +158,9 @@ pub struct LimitReport {
     /// Entities not drawn because a coordinate, size or angle they are drawn
     /// from is not a real number.
     pub unreadable_entities: usize,
+    /// Top-level entities not drawn because their extent reaches more than
+    /// 1e15 drawing units from the origin.
+    pub out_of_range_entities: usize,
     /// Which entities the counts above are about, in the order they were
     /// met: one entry per (entity, cap) pair, at most 100 of them.
     pub dropped: Vec<Dropped>,

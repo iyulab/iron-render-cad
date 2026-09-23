@@ -116,6 +116,10 @@ the cap that acted on each). The caps:
   1e11 pixels on a side. The pattern is dropped and the outline kept.
 - An entity drawn from a coordinate, size or angle that is not a real number (`NaN`,
   infinite) is not drawn: it names no place, and SVG has no way to write it.
+- An entity whose extent reaches more than 1e15 drawing units from the origin is not drawn
+  and does not count towards the extent: the viewBox, the stroke width, the padding and
+  every dash length are derived from the extent, so one entity at 1e150 would take all of
+  them with it. (The Earth's circumference in micrometres is 4e13.)
 
 A block holding one LINE and eight INSERTs of itself used to expand into a million
 references and a 139 MB SVG before anything stopped it.

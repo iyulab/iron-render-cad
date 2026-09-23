@@ -25,9 +25,9 @@ mod spline;
 use crate::color::{resolve_color, DEFAULT_COLOR};
 use crate::limits::{
     Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
-    MAX_SVG_BODY_BYTES,
+    MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
 };
-use bounds::{dominant_cluster_box, Box2D};
+use bounds::{bbox_of, dominant_cluster_box, Box2D};
 use format::{
     clean, escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy,
 };
@@ -101,8 +101,6 @@ fn svg_matrix(t: &Affine2) -> [f64; 6] {
 // --- render context ----------------------------------------------------
 
 struct Ctx<'a> {
-    xs: Vec<f64>,
-    ys: Vec<f64>,
     ent_min_x: f64,
     ent_max_x: f64,
     ent_min_y: f64,
@@ -148,8 +146,6 @@ struct Ctx<'a> {
 impl<'a> Ctx<'a> {
     fn new(tables: &'a Tables) -> Self {
         Ctx {
-            xs: Vec::new(),
-            ys: Vec::new(),
             ent_min_x: f64::INFINITY,
             ent_max_x: f64::NEG_INFINITY,
             ent_min_y: f64::INFINITY,
@@ -205,8 +201,6 @@ impl<'a> Ctx<'a> {
         if !x.is_finite() || !y.is_finite() {
             return;
         }
-        self.xs.push(x);
-        self.ys.push(y);
         if x < self.ent_min_x {
             self.ent_min_x = x;
         }
@@ -1170,6 +1164,14 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     }
 }
 
+/// Whether a measured world box lies within [`MAX_WORLD_COORDINATE`] of the
+/// origin on both axes -- whether a viewBox can be built from it.
+fn within_world(b: &Box2D) -> bool {
+    [b.min_x, b.max_x, b.min_y, b.max_y]
+        .iter()
+        .all(|v| v.abs() < MAX_WORLD_COORDINATE)
+}
+
 /// Wireframe entities share one shape: draw the edges, or report the type as
 /// unsupported when extraction produced none.
 fn render_wireframe_entity(
@@ -1237,7 +1239,17 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         ctx.reset_entity_bounds();
         ctx.entity_start = ctx.emitted;
         ctx.part_truncated = false;
-        if let Some(svg) = render_entity(e, &mut ctx) {
+        let svg = render_entity(e, &mut ctx);
+        let entity_box = ctx.entity_box();
+        if entity_box.is_some_and(|b| !within_world(&b)) {
+            // Past what a viewBox -- and the stroke width, padding and dash
+            // lengths derived from it -- can be built from.
+            ctx.limits.out_of_range_entities += 1;
+            ctx.limits
+                .note(Cap::OutOfRange, e.common().id, e.type_name());
+            continue;
+        }
+        if let Some(svg) = svg {
             if ctx.part_truncated {
                 // What the entity drew before its budget ran out is kept;
                 // the report says the part is incomplete.
@@ -1249,18 +1261,15 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
                 body.push(svg);
             }
         }
-        if let Some(b) = ctx.entity_box() {
+        if let Some(b) = entity_box {
             entity_boxes.push(b);
         }
     }
 
-    let raw_bounds = || Box2D {
-        min_x: ctx.xs.iter().cloned().fold(f64::INFINITY, f64::min),
-        max_x: ctx.xs.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-        min_y: ctx.ys.iter().cloned().fold(f64::INFINITY, f64::min),
-        max_y: ctx.ys.iter().cloned().fold(f64::NEG_INFINITY, f64::max),
-    };
-    let bounds = if ctx.xs.is_empty() {
+    // Every point measured belongs to exactly one top-level entity's box,
+    // so the boxes' own extent is the extent of every point.
+    let raw_bounds = || bbox_of(&entity_boxes);
+    let bounds = if entity_boxes.is_empty() {
         Box2D {
             min_x: 0.0,
             max_x: 0.0,

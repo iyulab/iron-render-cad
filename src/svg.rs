@@ -30,9 +30,9 @@ use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
-    ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, LightType,
-    LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D, PolylineVertex, TextEntity,
-    TextHorizontalAlignment, TextVerticalAlignment,
+    ArcEntity, AttribEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId,
+    LightType, LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D, PolylineVertex,
+    TextEntity, TextHorizontalAlignment, TextVerticalAlignment,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase, Ocs};
@@ -528,7 +528,46 @@ fn text_element(at: Point2D, height: f64, rotation: f64, color: &str, text: &str
     )
 }
 
-/// A TEXT as a `<text>`, placed the way its alignment says.
+/// Where a single line of text goes: what a TEXT and an ATTRIB both state.
+struct TextPlacement {
+    start_point: Point2D,
+    text_height: f64,
+    rotation: f64,
+    horizontal_alignment: TextHorizontalAlignment,
+    vertical_alignment: TextVerticalAlignment,
+    alignment_point: Option<Point2D>,
+    width_factor: f64,
+}
+
+impl From<&TextEntity> for TextPlacement {
+    fn from(t: &TextEntity) -> Self {
+        TextPlacement {
+            start_point: t.start_point,
+            text_height: t.text_height,
+            rotation: t.rotation,
+            horizontal_alignment: t.horizontal_alignment,
+            vertical_alignment: t.vertical_alignment,
+            alignment_point: t.alignment_point,
+            width_factor: t.width_factor,
+        }
+    }
+}
+
+impl From<&AttribEntity> for TextPlacement {
+    fn from(a: &AttribEntity) -> Self {
+        TextPlacement {
+            start_point: a.start_point,
+            text_height: a.text_height,
+            rotation: a.rotation,
+            horizontal_alignment: a.horizontal_alignment,
+            vertical_alignment: a.vertical_alignment,
+            alignment_point: a.alignment_point,
+            width_factor: a.width_factor,
+        }
+    }
+}
+
+/// A TEXT or an ATTRIB as a `<text>`, placed the way its alignment says.
 ///
 /// Left and baseline -- or an alignment the file gives no point for -- is
 /// drawn from the start point. Otherwise the alignment point is the one the
@@ -540,7 +579,7 @@ fn text_element(at: Point2D, height: f64, rotation: f64, color: &str, text: &str
 /// The font drawn is not the file's, so the start point the file states --
 /// computed from the file's font -- would not center a centered text; the
 /// alignment point does.
-fn aligned_text_element(t: &TextEntity, color: &str, text: &str) -> String {
+fn aligned_text_element(t: &TextPlacement, color: &str, text: &str) -> String {
     use TextHorizontalAlignment as H;
     use TextVerticalAlignment as V;
     let height = t.text_height;
@@ -954,20 +993,21 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 ctx.consider(a.x, a.y);
             }
             Some(aligned_text_element(
-                t,
+                &TextPlacement::from(t),
                 &color,
                 &text_codes::decode(&t.text, false),
             ))
         }
         Entity::Attrib(a) => {
             ctx.consider(a.start_point.x, a.start_point.y);
+            if let Some(p) = a.alignment_point {
+                ctx.consider(p.x, p.y);
+            }
             if a.text.is_empty() {
                 return Some(String::new());
             }
-            Some(text_element(
-                a.start_point,
-                a.text_height,
-                a.rotation,
+            Some(aligned_text_element(
+                &TextPlacement::from(a),
                 &color,
                 &text_codes::decode(&a.text, false),
             ))
@@ -2143,6 +2183,28 @@ mod tests {
             svg.contains(
                 "textLength=\"5\" lengthAdjust=\"spacingAndGlyphs\" transform=\"rotate(-90 1 -2)\""
             ),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn an_attribute_value_is_placed_by_its_alignment_too() {
+        let svg = render_one(Entity::Attrib(AttribEntity {
+            common: plain_common(),
+            start_point: Point2D { x: 1.0, y: 2.0 },
+            text_height: 2.5,
+            tag: "DWGNO".to_string(),
+            text: "BP-1042".to_string(),
+            rotation: 0.0,
+            horizontal_alignment: TextHorizontalAlignment::Right,
+            vertical_alignment: TextVerticalAlignment::Middle,
+            alignment_point: Some(Point2D { x: 40.0, y: 3.0 }),
+            width_factor: 0.9,
+        }));
+        assert!(
+            svg.contains("x=\"40\" y=\"-3\"")
+                && svg.contains("text-anchor=\"end\" dominant-baseline=\"central\"")
+                && svg.contains("scale(0.9 1)"),
             "{svg}"
         );
     }

@@ -50,6 +50,9 @@ pub struct ToPngResult {
     pub unsupported_types: Vec<String>,
     /// See [`ToSvgResult::empty_blocks`](crate::ToSvgResult::empty_blocks).
     pub empty_blocks: Vec<String>,
+    /// See
+    /// [`ToSvgResult::unresolved_block_refs`](crate::ToSvgResult::unresolved_block_refs).
+    pub unresolved_block_refs: Vec<uncad_model::EntityId>,
     /// See [`ToSvgResult::limits`](crate::ToSvgResult::limits).
     pub limits: crate::limits::LimitReport,
 }
@@ -121,6 +124,7 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
         png,
         unsupported_types: svg_result.unsupported_types,
         empty_blocks: svg_result.empty_blocks,
+        unresolved_block_refs: svg_result.unresolved_block_refs,
         limits: svg_result.limits,
     })
 }

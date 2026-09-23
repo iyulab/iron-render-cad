@@ -103,6 +103,14 @@ pub struct ToSvgResult {
     /// whose INSERTs all resolved to nothing looks the same as one whose
     /// INSERTs drew.
     pub empty_blocks: Vec<String>,
+    /// The block references -- INSERT, ACAD_TABLE, DIMENSION -- that drew
+    /// nothing because the model holds no block for them: the reference is
+    /// [`Ref::Unresolved`] or [`Ref::Absent`], or it names a block
+    /// `tables.block_records` does not have. By reference ID, sorted, each
+    /// once; the entity's own `block_name` says which of the three it was.
+    /// A block that exists but draws nothing is in
+    /// [`empty_blocks`](Self::empty_blocks) instead.
+    pub unresolved_block_refs: Vec<EntityId>,
     /// What the renderer's bounds on numbers from the file left out of the
     /// picture -- empty for every well-formed drawing. See
     /// [`crate::limits`].
@@ -173,6 +181,9 @@ struct Ctx<'a> {
     /// `ToSvgResult::empty_blocks`); a set so a block referenced many times
     /// is reported once.
     empty_blocks: BTreeSet<String>,
+    /// Block references whose block the model does not hold (see
+    /// `ToSvgResult::unresolved_block_refs`).
+    unresolved_block_refs: BTreeSet<EntityId>,
     tables: &'a Tables,
     depth: u32,
     scale: f64,
@@ -227,6 +238,7 @@ impl<'a> Ctx<'a> {
             ent_max_y: f64::NEG_INFINITY,
             unsupported: BTreeSet::new(),
             empty_blocks: BTreeSet::new(),
+            unresolved_block_refs: BTreeSet::new(),
             tables,
             depth: 0,
             scale: 1.0,
@@ -636,8 +648,15 @@ fn render_block_ref(
     color: &str,
     ctx: &mut Ctx,
 ) -> String {
-    let block_name = block_name.name();
-    let Some(block) = ctx.tables.block_records.get(block_name) else {
+    let Some((block_name, block)) = block_name.resolved().and_then(|name| {
+        ctx.tables
+            .block_records
+            .get(name)
+            .map(|block| (name.as_str(), block))
+    }) else {
+        // Nothing to draw, and it has to be said: the file points at a
+        // block the model does not hold.
+        ctx.unresolved_block_refs.insert(owner.common().id);
         return String::new();
     };
     if block.entities.is_empty() {
@@ -1776,6 +1795,7 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         svg,
         unsupported_types: ctx.unsupported.into_iter().collect(),
         empty_blocks: ctx.empty_blocks.into_iter().collect(),
+        unresolved_block_refs: ctx.unresolved_block_refs.into_iter().collect(),
         limits: ctx.limits,
         origin,
     }

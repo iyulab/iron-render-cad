@@ -68,6 +68,11 @@ What the renderer cannot draw at all (a type the model has no shape for arrives 
 one type that will stay there for good is `ACAD_PROXY_ENTITY`: an opaque per-application
 blob with no geometry.
 
+A block reference (INSERT, ACAD_TABLE, DIMENSION) whose block the model does not hold -- a
+reference that never resolved, one that points at nothing, or a name with no definition --
+draws nothing and is reported in `ToSvgResult::unresolved_block_refs` by its ID; one whose
+block is there but draws nothing is reported in `empty_blocks` by the block's name.
+
 ## A far-away drawing is written about its own middle
 
 usvg and tiny-skia keep coordinates in `f32`, which at 2.5e8 -- a plan in millimetres at

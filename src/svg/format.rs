@@ -66,10 +66,37 @@ pub(super) fn points_attr(pts: &[Point2D]) -> String {
     s
 }
 
+/// Escapes `s` for XML text content (`&`, `<`, `>`; quotes are left alone,
+/// this is not an attribute value) and replaces every character XML 1.0
+/// forbids outright ([`is_xml_illegal`]) with U+FFFD.
+///
+/// One such character in one label -- a control byte a corrupt or oddly
+/// encoded file left in a string -- makes the whole document unparseable:
+/// usvg's XML parser refuses it, and `to_png` with it. The replacement
+/// character keeps a mark where it was, the same mark a reader leaves for a
+/// byte it could not decode.
 pub(super) fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            c if is_xml_illegal(c) => out.push('\u{FFFD}'),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Whether XML 1.0 forbids `c` in a document altogether: the C0 controls
+/// other than tab, line feed and carriage return, and the non-characters
+/// U+FFFE and U+FFFF. (A lone surrogate cannot occur in a Rust `char`.)
+pub(super) fn is_xml_illegal(c: char) -> bool {
+    matches!(
+        c,
+        '\u{0}'..='\u{8}' | '\u{B}' | '\u{C}' | '\u{E}'..='\u{1F}' | '\u{FFFE}' | '\u{FFFF}'
+    )
 }
 
 /// Renders a `rotate(deg x y)` `transform` attribute (leading space included,
@@ -160,6 +187,22 @@ mod tests {
         // Quotes are deliberately NOT escaped -- text content, not an
         // attribute value.
         assert_eq!(escape_xml("\"quoted\""), "\"quoted\"");
+    }
+
+    #[test]
+    fn escape_xml_marks_the_characters_xml_forbids() {
+        // XML 1.0 `Char`: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD]
+        // | [#x10000-#x10FFFF] -- so U+0001, U+000B, U+001F and U+FFFE are
+        // out, while tab, newline, carriage return, DEL and U+FFFD are in.
+        assert_eq!(
+            escape_xml("ZE\u{1}\u{B}RO\u{1F}\u{FFFE}"),
+            "ZE\u{FFFD}\u{FFFD}RO\u{FFFD}\u{FFFD}"
+        );
+        assert_eq!(
+            escape_xml("a\tb\nc\r\u{7F}\u{FFFD}"),
+            "a\tb\nc\r\u{7F}\u{FFFD}"
+        );
+        assert_eq!(escape_xml("\u{0}<"), "\u{FFFD}&lt;");
     }
 
     #[test]

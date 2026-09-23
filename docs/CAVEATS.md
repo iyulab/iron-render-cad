@@ -43,6 +43,14 @@ What the renderer cannot draw at all (a type the model has no shape for arrives 
 one type that will stay there for good is `ACAD_PROXY_ENTITY`: an opaque per-application
 blob with no geometry.
 
+## Characters XML forbids
+
+XML 1.0 forbids the C0 control characters other than tab, line feed and carriage return,
+and U+FFFE/U+FFFF, anywhere in a document. A corrupt or oddly encoded file can leave one in
+a text string, and one is enough to make the whole SVG unparseable -- and with it the PNG,
+which is rendered by parsing the SVG. The renderer writes U+FFFD in its place; the model
+keeps what the file said.
+
 ## Colors: white becomes black
 
 The renderer targets a plain white background. ACI index 7 (`0xFFFFFF`, "white/black")

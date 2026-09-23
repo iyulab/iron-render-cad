@@ -10,9 +10,12 @@
 //! [`ToSvgResult::limits`] -- rather than dropped in silence -- and what the
 //! drawing itself hides is counted in [`ToSvgResult::hidden`]. A paper
 //! layout can be drawn as its sheet, with the model shown through its
-//! viewports ([`layout_to_svg`], [`layout_to_png`]). A render is
-//! for people and for an agent's fallback view; it is never evidence that a
-//! drawing or an edit is correct.
+//! viewports ([`layout_to_svg`], [`layout_to_png`]). A [`Scene`] keeps one
+//! render -- a [`Part`] per top-level entity, with the box of the world it
+//! covers -- to write documents of any window from any subset of its parts:
+//! render once, assemble many. A render is for people and for an agent's
+//! fallback view; it is never evidence that a drawing or an edit is
+//! correct.
 //!
 //! The rules are in `docs/principles.md`; what is approximated and what is
 //! unverified is in `docs/CAVEATS.md`.
@@ -29,5 +32,6 @@ pub use png::{
     ToPngResult, DEFAULT_MAX_EDGE,
 };
 pub use svg::{
-    layout_to_svg, to_svg, LayoutError, Space, ToSvgOptions, ToSvgResult, DEFAULT_CAP_HEIGHT,
+    layout_to_svg, to_svg, Hidden, LayoutError, Part, Rect, Scene, Space, ToSvgOptions,
+    ToSvgResult, DEFAULT_CAP_HEIGHT,
 };

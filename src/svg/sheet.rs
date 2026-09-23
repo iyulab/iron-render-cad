@@ -15,7 +15,8 @@ use super::bounds::{intersects, Box2D};
 use super::format::{clean, Frame};
 use super::{
     choose_origin, fitted_view_box, infinite, select_entities_for_space, select_owned_by,
-    stroke_width_placeholder, svg_matrix, view_box_of, walk, Ctx, Rendered, Space, ToSvgOptions,
+    stroke_width_placeholder, svg_matrix, view_box_of, walk, Ctx, Part, Rect, Scene, Space,
+    ToSvgOptions,
 };
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -65,7 +66,7 @@ pub(crate) fn render_layout(
     db: &CadDatabase,
     name: &str,
     options: ToSvgOptions,
-) -> Result<Rendered, LayoutError> {
+) -> Result<Scene, LayoutError> {
     let layout = db.tables.layouts.get(name).ok_or(LayoutError::NotFound)?;
     let (block_name, block) = layout
         .block_name
@@ -84,9 +85,11 @@ pub(crate) fn render_layout(
         oy: paper_origin.y,
     };
     let mut ctx = Ctx::configured(&db.tables, &options, paper_origin);
-    let paper_parts = walk(&paper, &mut ctx);
-    let paper_boxes: Vec<Box2D> = paper_parts.iter().filter_map(|p| p.extent).collect();
-    let mut body: Vec<String> = paper_parts.into_iter().map(|p| p.svg).collect();
+    let mut walked = walk(&paper, &mut ctx);
+    let paper_boxes: Vec<Box2D> = walked
+        .iter()
+        .filter_map(|(part, _)| part.extent.map(Box2D::from))
+        .collect();
 
     // The model, written about its own middle, once per viewport that
     // shows it.
@@ -143,12 +146,14 @@ pub(crate) fn render_layout(
         };
         let shown: Vec<String> = parts
             .into_iter()
-            .filter(|p| {
-                !p.svg.is_empty()
-                    && (infinite::contains_placeholder(&p.svg)
-                        || p.extent.is_some_and(|b| intersects(&b, &frame_box)))
+            .filter(|(part, svg)| {
+                !svg.is_empty()
+                    && (part.unbounded
+                        || part
+                            .extent
+                            .is_some_and(|b| intersects(&Box2D::from(b), &frame_box)))
             })
-            .map(|p| p.svg)
+            .map(|(_, svg)| svg)
             .collect();
         if shown.is_empty() {
             continue;
@@ -169,16 +174,27 @@ pub(crate) fn render_layout(
             stroke_width_placeholder(scale),
             shown.join("\n  ")
         );
-        body.push(group);
+        walked.push((
+            Part {
+                id: vp.common.id,
+                type_name: "VIEWPORT".to_string(),
+                extent: Some(Rect::from(frame_box)),
+                drawn: true,
+                unbounded: false,
+                hidden: None,
+                through_viewport: true,
+            },
+            group,
+        ));
     }
 
     let view_box = match sheet(layout) {
         Some(paper) => view_box_of(&paper, 0.0, paper_origin),
         None => fitted_view_box(&paper_boxes, &options, paper_origin),
     };
-    let mut rendered = ctx.finish(body, view_box, paper_origin);
-    rendered.undrawn_viewports = undrawn.into_iter().collect();
-    Ok(rendered)
+    let mut scene = ctx.finish(walked, view_box, paper_origin);
+    scene.undrawn_viewports = undrawn.into_iter().collect();
+    Ok(scene)
 }
 
 /// What a viewport shows of the model.

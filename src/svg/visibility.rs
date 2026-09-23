@@ -11,10 +11,13 @@ use std::collections::BTreeSet;
 use uncad_model::model::Entity;
 use uncad_model::tables::Tables;
 
-/// Why an entity is not shown. Checked in this order, so an invisible
-/// entity on a frozen layer is hidden because it is invisible.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Hidden {
+/// Why the drawing hides an entity (see
+/// [`ToSvgOptions::include_hidden`](crate::ToSvgOptions::include_hidden)).
+/// Checked in this order, so an invisible entity on a frozen layer is
+/// hidden because it is invisible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum Hidden {
     /// The entity's own invisible flag (DXF 60), or an ATTRIB's (DXF 70,
     /// bit 1).
     Invisible,

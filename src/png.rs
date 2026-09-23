@@ -289,8 +289,8 @@ pub fn layout_to_png(
 }
 
 /// The PNG of a render, at `options`' size, stroke, fonts and background.
-fn png_result(rendered: svg::Rendered, options: &ToPngOptions) -> Result<ToPngResult, PngError> {
-    let [_, _, width, height] = rendered.view_box;
+fn png_result(scene: svg::Scene, options: &ToPngOptions) -> Result<ToPngResult, PngError> {
+    let [_, _, width, height] = scene.doc_view_box();
     let px_per_unit = match options.size {
         PngSize::Scale(s) => f64::from(s),
         PngSize::FitLongEdge(px) => f64::from(px) / width.max(height),
@@ -302,10 +302,10 @@ fn png_result(rendered: svg::Rendered, options: &ToPngOptions) -> Result<ToPngRe
         options.svg.stroke_width,
         options.stroke_px,
         px_per_unit,
-        rendered.auto_stroke_width,
+        scene.auto_stroke_width,
     );
     let png = rasterize(
-        &svg::assemble(&rendered, stroke),
+        &scene.document(stroke),
         px_per_unit as f32,
         options.max_edge,
         &options.fonts,
@@ -313,12 +313,12 @@ fn png_result(rendered: svg::Rendered, options: &ToPngOptions) -> Result<ToPngRe
     )?;
     Ok(ToPngResult {
         png,
-        unsupported_types: rendered.unsupported_types,
-        empty_blocks: rendered.empty_blocks,
-        unresolved_block_refs: rendered.unresolved_block_refs,
-        limits: rendered.limits,
-        hidden: rendered.hidden,
-        undrawn_viewports: rendered.undrawn_viewports,
+        unsupported_types: scene.unsupported_types,
+        empty_blocks: scene.empty_blocks,
+        unresolved_block_refs: scene.unresolved_block_refs,
+        limits: scene.limits,
+        hidden: scene.hidden,
+        undrawn_viewports: scene.undrawn_viewports,
     })
 }
 
@@ -522,8 +522,8 @@ mod tests {
             size: PngSize::FitLongEdge(1000),
             ..ToPngOptions::default()
         };
-        let rendered = svg::render(&db, options.svg);
-        let [_, _, w, h] = rendered.view_box;
+        let scene = svg::render(&db, options.svg);
+        let [_, _, w, h] = scene.doc_view_box();
         let (width, height) = png_dimensions(&to_png(&db, options).expect("renders").png);
         assert_eq!(width.max(height), 1000);
         let expected_short = (w.min(h) * 1000.0 / w.max(h)).round() as u32;

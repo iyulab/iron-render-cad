@@ -13,10 +13,11 @@
 //!
 //! Layout of this module: options and results, the block transform, the
 //! rendering context, per-entity rendering, then the top level -- `render`
-//! (walk and measure), `assemble` (resolve the placeholders into a
-//! document) and [`to_svg`], which runs the two.
+//! (walk and measure, into a [`Scene`]) and [`to_svg`], which assembles the
+//! scene's whole document ([`scene`] resolves the placeholders).
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
-//! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
+//! string formatting), [`scene`] (a render kept, and documents written from
+//! it), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
 //! [`infinite`] (RAY and XLINE, cut to the picture once the viewBox is
 //! known), [`ocs`] (the plane a planar entity is written in),
 //! [`bulge`] (the arcs a polyline's bulges describe), [`text_codes`] (what
@@ -30,13 +31,16 @@ mod hatch;
 mod infinite;
 mod justify;
 mod ocs;
+mod scene;
 mod sheet;
 mod spline;
 mod text_codes;
 mod visibility;
 
+pub use scene::{Part, Rect, Scene};
 pub(crate) use sheet::render_layout;
 pub use sheet::LayoutError;
+pub use visibility::Hidden;
 
 use crate::color::{effective_layer, resolve_color, DEFAULT_COLOR};
 use crate::limits::{
@@ -164,6 +168,11 @@ pub struct ToSvgResult {
     /// far-away drawing is written about a whole-unit point near its own
     /// middle instead.
     pub origin: Point2D,
+    /// The world rectangle the document shows -- its `viewBox`, padding
+    /// included, in drawing units with y up rather than as the document
+    /// writes it (relative to [`origin`](Self::origin), y down). For a
+    /// layout's sheet, the paper in the layout's paper units.
+    pub view_box: Rect,
 }
 
 // --- block transform ---------------------------------------------------
@@ -299,19 +308,22 @@ impl<'a> Ctx<'a> {
         ctx
     }
 
-    /// The render this context has walked, with `body` as its parts in
-    /// drawing order (empty ones are dropped).
-    fn finish(self, body: Vec<String>, view_box: ViewBox, origin: Point2D) -> Rendered {
-        Rendered {
-            body: body.into_iter().filter(|svg| !svg.is_empty()).collect(),
+    /// The scene this context has walked: `walked` its parts in drawing
+    /// order, each with the elements it drew, framed by `view_box`.
+    fn finish(self, walked: Vec<(Part, String)>, view_box: ViewBox, origin: Point2D) -> Scene {
+        let (parts, body) = walked.into_iter().unzip();
+        Scene {
+            parts,
+            body,
             defs: self.defs,
-            view_box: view_box.rect,
+            doc_view_box: view_box.rect,
+            view_box: scene::world_rect(view_box.rect, origin),
+            origin,
             auto_stroke_width: view_box.auto_stroke_width,
             unsupported_types: self.unsupported.into_iter().collect(),
             empty_blocks: self.empty_blocks.into_iter().collect(),
             unresolved_block_refs: self.unresolved_block_refs.into_iter().collect(),
             limits: self.limits,
-            origin,
             hidden: self.hidden,
             undrawn_viewports: Vec::new(),
         }
@@ -2265,69 +2277,58 @@ fn choose_origin(selected: &[&Entity]) -> Point2D {
 
 // --- top level ---------------------------------------------------------
 
-/// Everything a render computes before the stroke width is known: the
-/// drawn elements with their placeholders still in place, the `<defs>`
-/// HATCH needs, the viewBox and what was reported. [`assemble`] turns it
-/// into a document; `png.rs` uses the split to choose a stroke width in
-/// pixels once it knows how many pixels a unit is.
-pub(crate) struct Rendered {
-    /// One element string per drawn top-level entity, in drawing order.
-    body: Vec<String>,
-    defs: Vec<String>,
-    /// The viewBox as the document writes it -- `x, y, width, height`, in
-    /// the render's frame (see [`ToSvgResult::origin`]), padding included.
-    pub(crate) view_box: [f64; 4],
-    /// The stroke width [`to_svg`] uses when none is given: ~1/6000th of the
-    /// padded extent's diagonal, floored at 0.01.
-    pub(crate) auto_stroke_width: f64,
-    pub(crate) unsupported_types: Vec<String>,
-    pub(crate) empty_blocks: Vec<String>,
-    pub(crate) unresolved_block_refs: Vec<EntityId>,
-    pub(crate) limits: LimitReport,
-    pub(crate) origin: Point2D,
-    pub(crate) hidden: usize,
-    /// See [`ToSvgResult::undrawn_viewports`]; empty but for a layout.
-    pub(crate) undrawn_viewports: Vec<EntityId>,
-}
-
 /// Renders every entity of `options.space`, measures the extent and settles
 /// the viewBox (see [`fitted_view_box`]), leaving the stroke width
-/// unresolved.
-pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Rendered {
+/// unresolved: the [`Scene`] [`to_svg`] and [`crate::to_png`] assemble.
+pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Scene {
     let selected = select_entities_for_space(db, options.space);
     let origin = choose_origin(&selected);
     let mut ctx = Ctx::configured(&db.tables, &options, origin);
-    let parts = walk(&selected, &mut ctx);
-    let boxes: Vec<Box2D> = parts.iter().filter_map(|p| p.extent).collect();
+    let walked = walk(&selected, &mut ctx);
+    let boxes: Vec<Box2D> = walked
+        .iter()
+        .filter_map(|(part, _)| part.extent.map(Box2D::from))
+        .collect();
     let view_box = fitted_view_box(&boxes, &options, origin);
-    ctx.finish(parts.into_iter().map(|p| p.svg).collect(), view_box, origin)
+    ctx.finish(walked, view_box, origin)
 }
 
-/// What one top-level entity drew -- empty when it drew nothing -- and the
-/// extent it measured, in the coordinates `ctx.transform` takes it to.
-struct Part {
-    svg: String,
-    extent: Option<Box2D>,
-}
-
-/// Renders each of `selected` as one top-level part, in order. An entity
-/// whose extent reaches past what a viewBox can be built from is left out
-/// and reported; one cut short by the per-entity budget is kept and
-/// reported as truncated.
-fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<Part> {
-    let mut parts = Vec::new();
+/// Renders each of `selected` as one top-level [`Part`], in order, with the
+/// elements it drew (empty when it drew nothing). An entity whose extent
+/// reaches past what a viewBox can be built from is left out and reported;
+/// one cut short by the per-entity budget is kept and reported as
+/// truncated.
+fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<(Part, String)> {
+    let mut parts = Vec::with_capacity(selected.len());
     for e in selected {
+        let hidden = visibility::hidden_reason(
+            e,
+            ctx.tables,
+            ctx.inherited_layer.as_deref(),
+            &ctx.viewport_frozen,
+        );
         ctx.reset_entity_bounds();
         ctx.entity_start = ctx.emitted;
         ctx.part_truncated = false;
         let svg = render_entity(e, ctx);
         let extent = ctx.entity_box();
+        let mut part = Part {
+            id: e.common().id,
+            type_name: e.type_name().to_string(),
+            extent: extent.map(Rect::from),
+            drawn: false,
+            unbounded: false,
+            hidden,
+            through_viewport: false,
+        };
         if extent.is_some_and(|b| !within_world(&b)) {
             // Past what a viewBox -- and the stroke width, padding and dash
             // lengths derived from it -- can be built from.
             ctx.limits.out_of_range_entities += 1;
             ctx.limits
                 .note(Cap::OutOfRange, e.common().id, e.type_name());
+            part.extent = None;
+            parts.push((part, String::new()));
             continue;
         }
         let svg = match svg {
@@ -2343,9 +2344,9 @@ fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<Part> {
             }
             None => String::new(),
         };
-        if !svg.is_empty() || extent.is_some() {
-            parts.push(Part { svg, extent });
-        }
+        part.drawn = !svg.is_empty();
+        part.unbounded = infinite::contains_placeholder(&svg);
+        parts.push((part, svg));
     }
     parts
 }
@@ -2401,29 +2402,6 @@ fn view_box_of(bounds: &Box2D, padding: f64, origin: Point2D) -> ViewBox {
     }
 }
 
-/// The SVG document of `rendered` with every stroke `stroke_width` drawing
-/// units wide (see [`stroke_width_placeholder`] for how nested block
-/// references keep that visual weight), and every construction line cut to
-/// the viewBox.
-pub(crate) fn assemble(rendered: &Rendered, stroke_width: f64) -> String {
-    let [x, y, width, height] = rendered.view_box;
-    let resolved_body = infinite::resolve(
-        resolve_stroke_widths(&rendered.body.join("\n  "), stroke_width),
-        infinite::window(x, y, width, height, stroke_width),
-    );
-    // HATCH pattern defs carry stroke-width placeholders too. Kept separate
-    // from the body only so an empty defs list emits no <defs> block at all.
-    let defs_block = if rendered.defs.is_empty() {
-        String::new()
-    } else {
-        let resolved_defs = resolve_stroke_widths(&rendered.defs.join("\n  "), stroke_width);
-        format!("<defs>\n  {resolved_defs}\n</defs>\n  ")
-    };
-    format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>"
-    )
-}
-
 /// Renders a parsed [`CadDatabase`] to an SVG string.
 ///
 /// `outlier_trim` (default `true`) computes the viewBox from the dominant
@@ -2467,19 +2445,20 @@ pub fn layout_to_svg(
     ))
 }
 
-/// [`assemble`]s `rendered` at `stroke_width`, or at its own automatic
-/// width when none is given.
-fn svg_result(rendered: Rendered, stroke_width: Option<f64>) -> ToSvgResult {
-    let stroke_width = stroke_width.unwrap_or(rendered.auto_stroke_width);
+/// `scene`'s whole document at `stroke_width`, or at its own automatic
+/// width when none is given, with its reports.
+fn svg_result(scene: Scene, stroke_width: Option<f64>) -> ToSvgResult {
+    let stroke_width = stroke_width.unwrap_or(scene.auto_stroke_width);
     ToSvgResult {
-        svg: assemble(&rendered, stroke_width),
-        unsupported_types: rendered.unsupported_types,
-        empty_blocks: rendered.empty_blocks,
-        unresolved_block_refs: rendered.unresolved_block_refs,
-        limits: rendered.limits,
-        origin: rendered.origin,
-        hidden: rendered.hidden,
-        undrawn_viewports: rendered.undrawn_viewports,
+        svg: scene.document(stroke_width),
+        unsupported_types: scene.unsupported_types,
+        empty_blocks: scene.empty_blocks,
+        unresolved_block_refs: scene.unresolved_block_refs,
+        limits: scene.limits,
+        origin: scene.origin,
+        hidden: scene.hidden,
+        undrawn_viewports: scene.undrawn_viewports,
+        view_box: scene.view_box,
     }
 }
 

@@ -16,16 +16,20 @@
 //!   any other `%%x`.
 //! - **Unicode escapes**, in any text: `\U+XXXX` is the Unicode character --
 //!   the way a DXF file writes a character its code page cannot hold, in
-//!   every string and not only in MTEXT. Outside MTEXT no other backslash
-//!   starts a code.
-//! - **MTEXT formatting codes**: `\P` (paragraph) and `\N` (column) break the
-//!   line; `\~` is a non-breaking space; `\\`, `\{` and `\}` are the
-//!   characters; `\S…;` is stacked text, drawn inline as `top/bottom`; codes that take a value up to `;` (`\A`,
-//!   `\C`, `\c`, `\F`, `\f`, `\H`, `\Q`, `\T`, `\W`, `\p`) and the one-letter
-//!   switches (`\L`, `\l`, `\O`, `\o`, `\K`, `\k`) change only how text looks
-//!   and are dropped, as are `{` / `}` grouping. `\M+nXXXX` (a character in
-//!   an Asian code page) is left as written: this crate has no code page
-//!   tables. Any other backslash is kept, with what follows it.
+//!   every string and not only in MTEXT, so a drawing saved both ways reads
+//!   the same. Outside MTEXT no other backslash starts a code.
+//! - **MTEXT formatting codes**: `\P` (paragraph), `\N` (column) and `\X` (a
+//!   dimension's text, split above and below its line) break the line; `\~`
+//!   is a non-breaking space; `\\`, `\{` and `\}` are the characters; `\S…;`
+//!   is stacked text, drawn inline as `top/bottom` -- one side alone when the
+//!   other is empty (a superscript or a subscript), and set off by a space
+//!   after a digit, so that `3\S1#2;` reads `3 1/2` and not thirty-one
+//!   halves; codes that take a value up to `;` (`\A`, `\C`, `\c`, `\F`,
+//!   `\f`, `\H`, `\Q`, `\T`, `\W`, `\p`) and the one-letter switches (`\L`,
+//!   `\l`, `\O`, `\o`, `\K`, `\k`) change only how text looks and are
+//!   dropped, as are `{` / `}` grouping. `\M+nXXXX` (a character in an Asian
+//!   code page) is left as written: this crate has no code page tables. Any
+//!   other backslash is kept, with what follows it.
 //!
 //! What is drawn is plain text -- fonts, colors, heights and stacking are
 //! not reproduced.
@@ -110,7 +114,7 @@ fn mtext_code(rest: &[char], out: &mut String) -> usize {
         return 0;
     };
     match c {
-        'P' | 'N' => out.push('\n'),
+        'P' | 'N' | 'X' => out.push('\n'),
         '~' => out.push(' '),
         '\\' | '{' | '}' => out.push(c),
         'L' | 'l' | 'O' | 'o' | 'K' | 'k' => {}
@@ -126,10 +130,7 @@ fn mtext_code(rest: &[char], out: &mut String) -> usize {
                 out.push_str("\\S");
                 return 1;
             };
-            out.extend(rest[1..end].iter().map(|&x| match x {
-                '^' | '#' => '/',
-                x => x,
-            }));
+            push_stack(&rest[1..end], out);
             return end + 1;
         }
         'A' | 'C' | 'c' | 'F' | 'f' | 'H' | 'Q' | 'T' | 'W' | 'p' => {
@@ -162,6 +163,33 @@ fn shape_font_char(code: u32) -> Option<char> {
         129 => Some('\u{2300}'),
         _ => char::from_u32(code).filter(|c| !c.is_control()),
     }
+}
+
+/// Writes a stack's body inline as `top/bottom`, whichever of `^`, `#` and
+/// `/` separates the two. A stack with one side empty -- a superscript
+/// `2^`, a subscript `^2` -- is the other side alone, not a fraction with a
+/// dangling bar; and a stack that follows a digit is set off from it by a
+/// space, since `3` and `1/2` written together read as `31/2`.
+fn push_stack(body: &[char], out: &mut String) {
+    let blank = |side: &[char]| side.iter().all(|x| x.is_whitespace());
+    let shown: Vec<char> = match body.iter().position(|&x| matches!(x, '^' | '#' | '/')) {
+        Some(at) if blank(&body[..at]) => body[at + 1..].to_vec(),
+        Some(at) if blank(&body[at + 1..]) => body[..at].to_vec(),
+        _ => body
+            .iter()
+            .map(|&x| match x {
+                '^' | '#' => '/',
+                x => x,
+            })
+            .collect(),
+    };
+    if blank(&shown) {
+        return;
+    }
+    if out.ends_with(|c: char| c.is_ascii_digit()) {
+        out.push(' ');
+    }
+    out.extend(shown);
 }
 
 /// `+XXXX` (four hex digits) as the character it names.
@@ -249,5 +277,80 @@ mod tests {
         assert_eq!(decode("%%128", false), "\u{b1}");
         // A control character cannot be drawn: the code stays as written.
         assert_eq!(decode("a%%001b", false), "a%%001b");
+    }
+
+    #[test]
+    fn a_unicode_escape_is_its_character_in_a_text_too() {
+        assert_eq!(decode(r"\U+00B1 3", false), "\u{b1} 3");
+        assert_eq!(decode(r"\U+2205 50", true), "\u{2205} 50");
+        // Not an escape: kept, backslash and all.
+        assert_eq!(decode(r"\U+ZZZZ", false), r"\U+ZZZZ");
+        assert_eq!(decode(r"C:\Temp\{x}", false), r"C:\Temp\{x}");
+    }
+
+    #[test]
+    fn a_dimensions_text_below_its_line_is_a_line_of_its_own() {
+        assert_eq!(decode(r"A\PB\XC\ND", true), "A\nB\nC\nD");
+    }
+
+    #[test]
+    fn a_fraction_after_a_number_keeps_the_number_readable() {
+        // Three and a half inches, not thirty-one halves.
+        assert_eq!(decode(r#"3{\H0.7x;\S1#2;}""#, true), r#"3 1/2""#);
+        assert_eq!(
+            decode(r#"\A1;1'-1{\H0.750000x;\S1#8;}""#, true),
+            r#"1'-1 1/8""#
+        );
+        assert_eq!(decode(r#"\A1;{\H0.750000x;\S1#2;}""#, true), r#"1/2""#);
+        assert_eq!(decode(r#"\A1;7'-4""#, true), r#"7'-4""#);
+    }
+
+    #[test]
+    fn every_stack_separator_is_a_bar_and_a_one_sided_stack_is_its_side() {
+        assert_eq!(decode(r"\S1/2;", true), "1/2");
+        assert_eq!(decode(r"\S1#2;", true), "1/2");
+        assert_eq!(decode(r"\S+0.1^-0.2;", true), "+0.1/-0.2");
+        // A superscript and a subscript are stacks with one side empty.
+        assert_eq!(decode(r"m\S2^;", true), "m2");
+        assert_eq!(decode(r"H\S^2;", true), "H2");
+        assert_eq!(decode(r"\Sabc;", true), "abc");
+        assert_eq!(decode(r"x\S^;y", true), "xy");
+    }
+
+    #[test]
+    fn paragraph_and_character_codes_leave_only_the_text() {
+        assert_eq!(decode(r"ALPHA\P\PBRAVO", true), "ALPHA\n\nBRAVO");
+        assert_eq!(
+            decode(
+                r"\pi102.25;{\f@Arial Unicode MS|b1|i0|c0|p34;A T M O S}",
+                true
+            ),
+            "A T M O S"
+        );
+        assert_eq!(decode(r"\C1;red\C256;bylayer", true), "redbylayer");
+        assert_eq!(decode(r"\fArial|b0|i0;\W0.8;\Q10;\T1.2;\H2.5;x", true), "x");
+        assert_eq!(
+            decode(r"\Lunder\l \Oover\o \Kstrike\k", true),
+            "under over strike"
+        );
+        assert_eq!(decode("trailing\\", true), "trailing\\");
+        assert_eq!(
+            decode("방 101\\P면적 32.5\u{33A1}", true),
+            "방 101\n면적 32.5\u{33A1}"
+        );
+    }
+
+    #[test]
+    fn percent_codes_read_the_same_in_a_text() {
+        assert_eq!(decode("108%%d", false), "108\u{b0}");
+        assert_eq!(decode("%%P0.5", false), "\u{b1}0.5");
+        assert_eq!(decode("%%UBOOK RETURN%%U", false), "BOOK RETURN");
+        assert_eq!(decode("%%176", false), "\u{b0}");
+        // A code naming a control character is left as written.
+        assert_eq!(decode("a%%009b", false), "a%%009b");
+        assert_eq!(decode(r#"\A1;2"%%C"#, true), "2\"\u{2300}");
+        // Not codes.
+        assert_eq!(decode("50%", false), "50%");
+        assert_eq!(decode("a%%zb", false), "a%%zb");
     }
 }

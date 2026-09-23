@@ -21,7 +21,7 @@ Input is expressed in the [uncad-model](https://github.com/iyulab/uncad-model) e
 
 ## Status
 
-0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything), report the entity types they could not draw and the block references that drew nothing, and are deterministic byte for byte. The overlay (change set on top of the original) is not implemented yet. The design principles are
+0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything) -- `layout_to_svg` and `layout_to_png` one paper layout as its sheet, with the model shown through its viewports -- report the entity types they could not draw, the block references that drew nothing, what the bounds on the file's numbers left out and how much the drawing itself hides (layers off, frozen or not plotted, invisible entities) and which entities the picture's frame leaves out and why, and are deterministic byte for byte. A `Scene` keeps one render, one part per top-level entity with the box of the world it covers, and writes a document of any window from any subset of those parts -- tiles of a large plan without walking it once per tile -- and draws any `View` of it, a grid of pixels laid over the world that also says which world point each pixel shows, and says where each of its texts lands with a given set of fonts. A malformed drawing may cost a missing entity and a note saying so, never the process. The overlay (change set on top of the original) is not implemented yet. The design principles are
 in [docs/principles.md](docs/principles.md); what is approximated and what is unverified is in
 [docs/CAVEATS.md](docs/CAVEATS.md).
 
@@ -32,6 +32,22 @@ std::fs::write("drawing.svg", svg.svg)?;
 println!("not drawn: {:?}", svg.unsupported_types);
 let png = iron_render_cad::to_png(&db, iron_render_cad::ToPngOptions::default())?;
 std::fs::write("drawing.png", png.png)?;
+```
+
+Render once, draw many pictures of it -- here one tile, and where each text landed:
+
+```rust
+use iron_render_cad::{Background, Crop, Fonts, Rect, Scene, ToSvgOptions, View};
+
+let scene = Scene::new(&db, ToSvgOptions { crop: Crop::Guarded { stated: None }, ..ToSvgOptions::default() });
+let tile = Rect::new(0.0, 0.0, 100.0, 100.0);
+let view = View::of(tile, 10.0).expect("a positive scale"); // 1000 x 1000 px
+let png = scene.png(&view, 1.25, &Fonts::System, Background::White, |part| {
+    part.unbounded || part.extent.is_some_and(|e| e.intersects(&tile))
+})?;
+for text in scene.text_boxes(&Fonts::System)? {
+    println!("{:?} {:?} {:?}", text.path, text.text, text.measured);
+}
 ```
 
 ## License

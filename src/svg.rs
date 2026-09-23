@@ -962,12 +962,39 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Face3D(f) => {
             // Unlike SOLID, 3DFACE's 4 corners are already sequential.
-            // Edge-visibility flag bits are ignored; all 4 edges always draw.
             let pts = xy(&[f.corner1, f.corner2, f.corner3, f.corner4]);
             ctx.consider_all(&pts);
+            if f.invisible_edges.iter().all(|hidden| !hidden) {
+                return Some(format!(
+                    "<polygon points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
+                    points_attr(&pts)
+                ));
+            }
+            // Only the edges the file does not hide: a mesh of faces shows
+            // its outline, not the edges its faces share.
+            let mut d = String::new();
+            for (i, hidden) in f.invisible_edges.iter().enumerate() {
+                if *hidden {
+                    continue;
+                }
+                let (a, b) = (pts[i], pts[(i + 1) % 4]);
+                if !d.is_empty() {
+                    d.push(' ');
+                }
+                let _ = write!(
+                    d,
+                    "M {} {} L {} {}",
+                    clean(a.x),
+                    neg(a.y),
+                    clean(b.x),
+                    neg(b.y)
+                );
+            }
+            if d.is_empty() {
+                return Some(String::new());
+            }
             Some(format!(
-                "<polygon points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                points_attr(&pts)
+                "<path d=\"{d}\" fill=\"none\" stroke=\"{color}\"/>"
             ))
         }
         Entity::Ray(r) | Entity::XLine(r) => {
@@ -1659,6 +1686,43 @@ mod tests {
             y: 0.0,
             z: -1.0,
         }
+    }
+
+    fn face(invisible_edges: [bool; 4]) -> Entity {
+        use uncad_model::model::Face3DEntity;
+        let c = |x, y| Point3D { x, y, z: 0.0 };
+        Entity::Face3D(Face3DEntity {
+            common: plain_common(),
+            corner1: c(0.0, 0.0),
+            corner2: c(4.0, 0.0),
+            corner3: c(4.0, 3.0),
+            corner4: c(0.0, 3.0),
+            invisible_edges,
+        })
+    }
+
+    #[test]
+    fn a_face_draws_only_the_edges_its_file_does_not_hide() {
+        // All visible: the closed outline, as before.
+        assert!(render_one(face([false; 4])).contains("<polygon"));
+        // Second edge (corner 2 to corner 3) hidden: three separate edges.
+        let svg = render_one(face([false, true, false, false]));
+        let cmds = path_commands(&svg);
+        let names: Vec<&str> = cmds.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(names, ["M", "L", "M", "L", "M", "L"], "{svg}");
+        // Each edge is one M-L pair; the hidden one, x = 4 from y = 0 to 3
+        // (page y 0 to -3), is not among them.
+        let edges: Vec<(&[f64], &[f64])> = cmds
+            .chunks(2)
+            .map(|pair| (pair[0].1.as_slice(), pair[1].1.as_slice()))
+            .collect();
+        assert_eq!(edges.len(), 3, "{svg}");
+        assert!(
+            !edges.contains(&([4.0, 0.0].as_slice(), [4.0, -3.0].as_slice())),
+            "{svg}"
+        );
+        // Every edge hidden: nothing drawn.
+        assert!(!render_one(face([true; 4])).contains("<path"));
     }
 
     #[test]

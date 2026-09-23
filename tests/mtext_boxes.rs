@@ -12,7 +12,7 @@
 
 use std::f64::consts::FRAC_PI_2;
 
-use iron_render_cad::{to_svg, Space, ToSvgOptions};
+use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, MTextAttachment, MTextEntity, Origin, Point3D, Ref,
 };
@@ -77,7 +77,7 @@ fn extent(m: MText) -> [f64; 4] {
         ToSvgOptions {
             space: Space::All,
             padding: 0.0,
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..ToSvgOptions::default()
         },
     )

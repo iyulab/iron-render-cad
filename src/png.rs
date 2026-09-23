@@ -279,6 +279,8 @@ pub struct ToPngResult {
     /// See
     /// [`ToSvgResult::undrawn_viewports`](crate::ToSvgResult::undrawn_viewports).
     pub undrawn_viewports: Vec<uncad_model::EntityId>,
+    /// See [`ToSvgResult::crop`](crate::ToSvgResult::crop).
+    pub crop: crate::CropReport,
 }
 
 #[derive(Debug)]
@@ -405,6 +407,7 @@ fn png_result(scene: svg::Scene, options: &ToPngOptions) -> Result<ToPngResult, 
         limits: scene.limits,
         hidden: scene.hidden,
         undrawn_viewports: scene.undrawn_viewports,
+        crop: scene.crop,
     })
 }
 

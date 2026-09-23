@@ -11,7 +11,7 @@
 
 use std::f64::consts::FRAC_1_SQRT_2;
 
-use iron_render_cad::{to_svg, Space, ToSvgOptions, ToSvgResult};
+use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions, ToSvgResult};
 use uncad_model::model::{
     CircleEntity, Confidence, Entity, EntityCommon, EntityId, Origin, Point3D, Ref,
 };
@@ -24,7 +24,7 @@ fn render(db: &CadDatabase) -> ToSvgResult {
         ToSvgOptions {
             space: Space::All,
             padding: 0.0,
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..ToSvgOptions::default()
         },
     )

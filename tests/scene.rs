@@ -7,7 +7,9 @@
 
 use std::collections::BTreeMap;
 
-use iron_render_cad::{layout_to_svg, to_svg, Hidden, Part, Rect, Scene, Space, ToSvgOptions};
+use iron_render_cad::{
+    layout_to_svg, to_svg, Crop, Hidden, LeftOutReason, Part, Rect, Scene, Space, ToSvgOptions,
+};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, LineEntity, Origin, Point3D, RayEntity, Ref,
 };
@@ -76,7 +78,7 @@ fn all() -> ToSvgOptions {
     ToSvgOptions {
         space: Space::All,
         padding: 0.0,
-        outlier_trim: false,
+        crop: Crop::Everything,
         ..ToSvgOptions::default()
     }
 }
@@ -146,13 +148,32 @@ fn the_whole_scene_is_to_svgs_document_byte_for_byte() {
             other => other,
         })
         .collect());
-    for (db, options) in [(&g1, ToSvgOptions::default()), (&far, all())] {
+    // And with an outlier the guard sets aside, which to_svg does not draw.
+    let mut spread = square();
+    spread.push(line(0x9, (1.0e6, 1.0e6), (2.0e6, 2.0e6)));
+    let spread = db(spread);
+    let guarded = ToSvgOptions {
+        crop: Crop::Guarded { stated: None },
+        ..all()
+    };
+    for (db, options) in [
+        (&g1, ToSvgOptions::default()),
+        (&far, all()),
+        (&spread, guarded),
+    ] {
         let scene = Scene::new(db, options);
         let result = to_svg(db, options);
+        let drawn = |p: &Part| {
+            !matches!(
+                p.left_out,
+                Some(LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier)
+            )
+        };
         assert_eq!(
-            scene.svg(scene.view_box, scene.auto_stroke_width, |_| true),
+            scene.svg(scene.view_box, scene.auto_stroke_width, drawn),
             result.svg
         );
+        assert_eq!(scene.crop, result.crop);
         assert_eq!(scene.view_box, result.view_box);
         assert_eq!(scene.origin, result.origin);
         assert_eq!(scene.hidden, result.hidden);

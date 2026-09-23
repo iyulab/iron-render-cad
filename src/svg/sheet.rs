@@ -14,9 +14,9 @@
 use super::bounds::{intersects, Box2D};
 use super::format::{clean, Frame};
 use super::{
-    choose_origin, fitted_view_box, infinite, select_entities_for_space, select_owned_by,
-    stroke_width_placeholder, svg_matrix, view_box_of, walk, Ctx, Part, Rect, Scene, Space,
-    ToSvgOptions,
+    choose_origin, crop_parts, crop_report, infinite, scene, select_entities_for_space,
+    select_owned_by, stroke_width_placeholder, svg_matrix, view_box_of, walk, Ctx, Framed, Part,
+    Rect, Scene, Space, ToSvgOptions,
 };
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
@@ -86,10 +86,7 @@ pub(crate) fn render_layout(
     };
     let mut ctx = Ctx::configured(&db.tables, &options, paper_origin);
     let mut walked = walk(&paper, &mut ctx);
-    let paper_boxes: Vec<Box2D> = walked
-        .iter()
-        .filter_map(|(part, _)| part.extent.map(Box2D::from))
-        .collect();
+    let paper_parts = walked.len();
 
     // The model, written about its own middle, once per viewport that
     // shows it.
@@ -182,17 +179,35 @@ pub(crate) fn render_layout(
                 drawn: true,
                 unbounded: false,
                 hidden: None,
+                left_out: None,
                 through_viewport: true,
             },
             group,
         ));
     }
 
-    let view_box = match sheet(layout) {
-        Some(paper) => view_box_of(&paper, 0.0, paper_origin),
-        None => fitted_view_box(&paper_boxes, &options, paper_origin),
+    // The sheet frames itself; only a layout that states none is framed by
+    // the crop, over the sheet's own entities.
+    let (framed, padding) = match sheet(layout) {
+        Some(paper) => (
+            Framed {
+                content: Some(paper),
+                stated_taken: false,
+            },
+            0.0,
+        ),
+        None => (
+            crop_parts(&mut walked[..paper_parts], options.crop),
+            options.padding,
+        ),
     };
-    let mut scene = ctx.finish(walked, view_box, paper_origin);
+    let view_box = view_box_of(&framed.content_or_origin(), padding, paper_origin);
+    let crop = crop_report(
+        &mut walked,
+        framed,
+        &scene::world_rect(view_box.rect, paper_origin),
+    );
+    let mut scene = ctx.finish(walked, view_box, paper_origin, crop);
     scene.undrawn_viewports = undrawn.into_iter().collect();
     Ok(scene)
 }

@@ -8,7 +8,9 @@
 //! the model does not hold in [`ToSvgResult::unresolved_block_refs`], and
 //! what the bounds on the file's numbers left out in
 //! [`ToSvgResult::limits`] -- rather than dropped in silence -- and what the
-//! drawing itself hides is counted in [`ToSvgResult::hidden`]. A paper
+//! drawing itself hides is counted in [`ToSvgResult::hidden`]. The picture
+//! frames the rectangle [`ToSvgOptions::crop`] chooses, and
+//! [`ToSvgResult::crop`] names every entity it leaves out. A paper
 //! layout can be drawn as its sheet, with the model shown through its
 //! viewports ([`layout_to_svg`], [`layout_to_png`]). A [`Scene`] keeps one
 //! render -- a [`Part`] per top-level entity, with the box of the world it
@@ -33,6 +35,6 @@ pub use png::{
     ToPngResult, View, DEFAULT_MAX_EDGE,
 };
 pub use svg::{
-    layout_to_svg, to_svg, Hidden, LayoutError, Part, Rect, Scene, Space, ToSvgOptions,
-    ToSvgResult, DEFAULT_CAP_HEIGHT,
+    layout_to_svg, to_svg, Crop, CropReport, Hidden, LayoutError, LeftOut, LeftOutReason, Part,
+    Rect, Scene, Space, ToSvgOptions, ToSvgResult, DEFAULT_CAP_HEIGHT,
 };

@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use iron_render_cad::{to_png, to_svg, Space, ToPngOptions, ToSvgOptions};
+use iron_render_cad::{to_png, to_svg, Crop, Space, ToPngOptions, ToSvgOptions};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, InsertEntity, LineEntity, Origin, Point3D,
     RayEntity, Ref,
@@ -131,7 +131,7 @@ fn a_ray_that_misses_the_picture_draws_nothing() {
     let result = to_svg(
         &db(entities.clone(), BTreeMap::new()),
         ToSvgOptions {
-            outlier_trim: true,
+            crop: Crop::Cluster,
             ..all()
         },
     );
@@ -143,7 +143,7 @@ fn a_ray_that_misses_the_picture_draws_nothing() {
     let result = to_svg(
         &db(entities, BTreeMap::new()),
         ToSvgOptions {
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..all()
         },
     );

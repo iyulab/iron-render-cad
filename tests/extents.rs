@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 use iron_render_cad::limits::Cap;
-use iron_render_cad::{to_svg, Space, ToSvgOptions};
+use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions};
 use uncad_model::model::{
     ArcEntity, CircleEntity, Confidence, EllipseEntity, Entity, EntityCommon, EntityId,
     InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D, PointEntity,
@@ -84,7 +84,7 @@ fn extent(entities: Vec<Entity>, blocks: BTreeMap<String, BlockRecord>) -> [f64;
         ToSvgOptions {
             space: Space::All,
             padding: 0.0,
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..ToSvgOptions::default()
         },
     )

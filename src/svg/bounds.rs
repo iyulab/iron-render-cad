@@ -1,5 +1,6 @@
-//! viewBox computation: per-entity bounding boxes, and the outlier trim that
-//! picks the dominant spatially-connected cluster of them.
+//! viewBox computation: per-entity bounding boxes, and the cluster trim
+//! ([`crate::Crop::Cluster`]) that picks the dominant spatially-connected
+//! cluster of them.
 //!
 //! A straight per-axis gap test is fundamentally wrong for drawings: a
 //! rectangular room's opposite walls only touch at the corners, so an axis-gap

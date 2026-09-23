@@ -10,7 +10,7 @@
 use std::collections::BTreeMap;
 
 use iron_render_cad::limits::Cap;
-use iron_render_cad::{to_png, to_svg, Space, ToPngOptions, ToSvgOptions};
+use iron_render_cad::{to_png, to_svg, Crop, Space, ToPngOptions, ToSvgOptions};
 use uncad_model::model::{
     CircleEntity, Confidence, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity,
     HatchPatternLine, InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D,
@@ -384,7 +384,7 @@ fn an_entity_reaching_absurdly_far_does_not_take_the_viewbox_with_it() {
     let result = to_svg(
         &drawing,
         ToSvgOptions {
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..all()
         },
     );

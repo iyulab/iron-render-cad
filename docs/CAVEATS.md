@@ -168,6 +168,25 @@ stroke width, and each viewport gets its own copy of the patterns it fills with.
   XLINE always is, and is cut at the sheet's edge.
 - A perspective view's lens length is not applied: a plan view is parallel.
 
+## What the picture shows
+
+The viewBox frames a rectangle chosen from the extents the top-level entities measured
+(`ToSvgOptions::crop`), padded. The default, `Crop::Cluster`, frames the dominant cluster of
+entities whose corners touch. It scores a cluster by its count times its size, so a single
+giant -- a block reference a corrupt file scales thousands of times -- can outscore the
+drawing itself; when no cluster then holds a majority, nothing is trimmed and the picture is
+the giant's. `Crop::Guarded` sets such outliers aside by rule instead: at most max(3, 1 %) of
+the entities, each over 20 times the size of the rest or over 20 of the rest's diagonals
+away from it, and never more than a fifth of the drawing. The thresholds are rules of thumb.
+What it sets aside is not drawn at all, since a giant would cross the picture whatever the
+viewBox. It can take an extent the caller states instead (a file header's), under the tests
+in `Crop::Guarded`'s documentation. A construction line (RAY, XLINE) measures only its base
+point and is never set aside.
+
+Every result lists the entities its picture does not show (`crop.left_out`), with the
+reason. One outside the viewBox, under any crop, is still in the SVG document, where a
+viewer that pans can reach it.
+
 ## A far-away drawing is written about its own middle
 
 usvg and tiny-skia keep coordinates in `f32`, which at 2.5e8 -- a plan in millimetres at

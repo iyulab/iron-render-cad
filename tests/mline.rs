@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 
-use iron_render_cad::{to_svg, Space, ToSvgOptions, ToSvgResult};
+use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions, ToSvgResult};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, MLineEntity, MLineVertex, Origin, Point3D, Ref,
 };
@@ -55,7 +55,7 @@ fn wall(scale: Option<f64>) -> ToSvgResult {
         ToSvgOptions {
             space: Space::All,
             padding: 0.0,
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..ToSvgOptions::default()
         },
     )

@@ -13,7 +13,7 @@
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
 
-use iron_render_cad::{to_svg, Space, ToSvgOptions};
+use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, HorizontalJustification, Origin, Point2D, Point3D,
     Ref, TextEntity, VerticalJustification,
@@ -89,7 +89,7 @@ fn render(db: &CadDatabase) -> String {
         ToSvgOptions {
             space: Space::All,
             padding: 0.0,
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..ToSvgOptions::default()
         },
     )

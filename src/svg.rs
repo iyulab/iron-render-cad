@@ -22,10 +22,12 @@
 //! known), [`ocs`] (the plane a planar entity is written in),
 //! [`bulge`] (the arcs a polyline's bulges describe), [`text_codes`] (what
 //! a text's control codes stand for), [`justify`] (where a single-line text
-//! hangs and the box it fills) and [`bounds`] (viewBox and outlier trim).
+//! hangs and the box it fills), [`bounds`] (boxes and the cluster trim) and
+//! [`crop`] (the rectangle the picture shows, and what it leaves out).
 
 mod bounds;
 mod bulge;
+mod crop;
 mod format;
 mod hatch;
 mod infinite;
@@ -37,6 +39,7 @@ mod spline;
 mod text_codes;
 mod visibility;
 
+pub use crop::{Crop, CropReport, LeftOut, LeftOutReason};
 pub use scene::{Part, Rect, Scene};
 pub(crate) use sheet::render_layout;
 pub use sheet::LayoutError;
@@ -47,7 +50,7 @@ use crate::limits::{
     Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
     MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
 };
-use bounds::{bbox_of, dominant_cluster_box, Box2D};
+use bounds::Box2D;
 use format::{clean, escape_xml, neg, xy, Frame};
 use justify::{Anchor, MTextBlock, TextLayout};
 use std::collections::BTreeSet;
@@ -78,7 +81,10 @@ pub struct ToSvgOptions {
     /// `None` = auto-scaled to the computed viewBox (see [`to_svg`]).
     pub stroke_width: Option<f64>,
     pub space: Space,
-    pub outlier_trim: bool,
+    /// How the rectangle the picture shows is chosen from the extents the
+    /// entities measured -- see [`Crop`]. Default [`Crop::Cluster`]; what it
+    /// leaves out is in [`ToSvgResult::crop`].
+    pub crop: Crop,
     /// How tall a capital letter is in the face the text will be drawn with,
     /// as a fraction of its em (the font's OS/2 `sCapHeight` over its units
     /// per em). A CAD text height is the height of the capitals, so a text of
@@ -108,7 +114,7 @@ impl Default for ToSvgOptions {
             padding: 5.0,
             stroke_width: None,
             space: Space::Model,
-            outlier_trim: true,
+            crop: Crop::Cluster,
             cap_height: DEFAULT_CAP_HEIGHT,
             include_hidden: false,
         }
@@ -173,6 +179,9 @@ pub struct ToSvgResult {
     /// writes it (relative to [`origin`](Self::origin), y down). For a
     /// layout's sheet, the paper in the layout's paper units.
     pub view_box: Rect,
+    /// How [`view_box`](Self::view_box) was chosen ([`ToSvgOptions::crop`])
+    /// and which top-level entities the picture does not show.
+    pub crop: CropReport,
 }
 
 // --- block transform ---------------------------------------------------
@@ -310,7 +319,13 @@ impl<'a> Ctx<'a> {
 
     /// The scene this context has walked: `walked` its parts in drawing
     /// order, each with the elements it drew, framed by `view_box`.
-    fn finish(self, walked: Vec<(Part, String)>, view_box: ViewBox, origin: Point2D) -> Scene {
+    fn finish(
+        self,
+        walked: Vec<(Part, String)>,
+        view_box: ViewBox,
+        origin: Point2D,
+        crop: CropReport,
+    ) -> Scene {
         let (parts, body) = walked.into_iter().unzip();
         Scene {
             parts,
@@ -326,6 +341,7 @@ impl<'a> Ctx<'a> {
             limits: self.limits,
             hidden: self.hidden,
             undrawn_viewports: Vec::new(),
+            crop,
         }
     }
 
@@ -2277,20 +2293,22 @@ fn choose_origin(selected: &[&Entity]) -> Point2D {
 
 // --- top level ---------------------------------------------------------
 
-/// Renders every entity of `options.space`, measures the extent and settles
-/// the viewBox (see [`fitted_view_box`]), leaving the stroke width
-/// unresolved: the [`Scene`] [`to_svg`] and [`crate::to_png`] assemble.
+/// Renders every entity of `options.space`, measures the extent and frames
+/// it as `options.crop` says, leaving the stroke width unresolved: the
+/// [`Scene`] [`to_svg`] and [`crate::to_png`] assemble.
 pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Scene {
     let selected = select_entities_for_space(db, options.space);
     let origin = choose_origin(&selected);
     let mut ctx = Ctx::configured(&db.tables, &options, origin);
-    let walked = walk(&selected, &mut ctx);
-    let boxes: Vec<Box2D> = walked
-        .iter()
-        .filter_map(|(part, _)| part.extent.map(Box2D::from))
-        .collect();
-    let view_box = fitted_view_box(&boxes, &options, origin);
-    ctx.finish(walked, view_box, origin)
+    let mut walked = walk(&selected, &mut ctx);
+    let framed = crop_parts(&mut walked, options.crop);
+    let view_box = view_box_of(&framed.content_or_origin(), options.padding, origin);
+    let crop = crop_report(
+        &mut walked,
+        framed,
+        &scene::world_rect(view_box.rect, origin),
+    );
+    ctx.finish(walked, view_box, origin, crop)
 }
 
 /// Renders each of `selected` as one top-level [`Part`], in order, with the
@@ -2319,6 +2337,7 @@ fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<(Part, String)> {
             drawn: false,
             unbounded: false,
             hidden,
+            left_out: None,
             through_viewport: false,
         };
         if extent.is_some_and(|b| !within_world(&b)) {
@@ -2351,30 +2370,75 @@ fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<(Part, String)> {
     parts
 }
 
-/// The viewBox, as the document writes it, that shows `boxes` -- trimmed
-/// of outliers and padded as `options` say -- and its automatic stroke
-/// width.
-///
-/// `outlier_trim` (default `true`) computes the viewBox from the dominant
-/// spatially-connected cluster of entities instead of the raw min/max --
-/// see [`bounds`] for why.
-fn fitted_view_box(boxes: &[Box2D], options: &ToSvgOptions, origin: Point2D) -> ViewBox {
-    // Every point measured belongs to exactly one top-level entity's box,
-    // so the boxes' own extent is the extent of every point.
-    let raw_bounds = || bbox_of(boxes);
-    let bounds = if boxes.is_empty() {
-        Box2D {
+/// What [`crop_parts`] framed.
+struct Framed {
+    /// See [`CropReport::content`].
+    content: Option<Box2D>,
+    stated_taken: bool,
+}
+
+impl Framed {
+    /// The framed rectangle, or the origin when nothing was measured: an
+    /// empty drawing is a padded canvas there.
+    fn content_or_origin(&self) -> Box2D {
+        self.content.unwrap_or(Box2D {
             min_x: 0.0,
             max_x: 0.0,
             min_y: 0.0,
             max_y: 0.0,
+        })
+    }
+}
+
+/// Runs `crop` over the extents `walked` measured and marks the parts it
+/// sets aside. A construction line is never set aside: its extent is only
+/// its base point, which may well be an outlier the frame should not
+/// stretch to, but the line crosses whatever the frame is.
+fn crop_parts(walked: &mut [(Part, String)], crop: Crop) -> Framed {
+    let measured: Vec<(usize, Box2D)> = walked
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (part, _))| part.extent.map(|e| (i, Box2D::from(e))))
+        .collect();
+    let boxes: Vec<Box2D> = measured.iter().map(|(_, b)| *b).collect();
+    let choice = crop::choose(&boxes, crop);
+    for (j, reason) in choice.set_aside {
+        let part = &mut walked[measured[j].0].0;
+        if !part.unbounded {
+            part.left_out = Some(reason);
         }
-    } else if options.outlier_trim && boxes.len() > 2 {
-        dominant_cluster_box(boxes).unwrap_or_else(raw_bounds)
-    } else {
-        raw_bounds()
-    };
-    view_box_of(&bounds, options.padding, origin)
+    }
+    Framed {
+        content: choice.content,
+        stated_taken: choice.stated_taken,
+    }
+}
+
+/// The crop's report for a scene whose view box is `view` (world): the
+/// parts set aside, and every other part whose extent does not reach the
+/// view -- marked in `walked` too -- in drawing order. A construction line
+/// reaches every view.
+fn crop_report(walked: &mut [(Part, String)], framed: Framed, view: &Rect) -> CropReport {
+    let mut left_out = Vec::new();
+    for (part, _) in walked.iter_mut() {
+        let Some(extent) = part.extent else { continue };
+        if part.left_out.is_none() && !part.unbounded && !extent.intersects(view) {
+            part.left_out = Some(LeftOutReason::OutsideView);
+        }
+        if let Some(reason) = part.left_out {
+            left_out.push(LeftOut {
+                id: part.id,
+                type_name: part.type_name.clone(),
+                extent,
+                reason,
+            });
+        }
+    }
+    CropReport {
+        content: framed.content.map(Rect::from),
+        stated_taken: framed.stated_taken,
+        left_out,
+    }
 }
 
 /// A viewBox and the stroke width [`to_svg`] uses when none is given.
@@ -2404,9 +2468,11 @@ fn view_box_of(bounds: &Box2D, padding: f64, origin: Point2D) -> ViewBox {
 
 /// Renders a parsed [`CadDatabase`] to an SVG string.
 ///
-/// `outlier_trim` (default `true`) computes the viewBox from the dominant
-/// spatially-connected cluster of entities instead of the raw min/max -- see
-/// [`bounds`] for why.
+/// The viewBox is the rectangle [`ToSvgOptions::crop`] chooses (by default
+/// the dominant spatially-connected cluster of entities rather than the raw
+/// min/max -- see [`bounds`] for why), padded; the entities it does not show
+/// are in [`ToSvgResult::crop`], and an outlier [`Crop::Guarded`] sets aside
+/// is not drawn at all.
 ///
 /// `stroke_width` defaults to ~1/6000th of the computed viewBox diagonal
 /// rather than a fixed value; see [`stroke_width_placeholder`] for how nested
@@ -2422,8 +2488,8 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
 /// frozen in it. The viewBox is the sheet: the layout's limits when they
 /// span a rectangle, else the paper its plot settings describe, with no
 /// padding; a layout that states neither is framed like a render of its
-/// paper space (`padding` and `outlier_trim` as `options` say). `space` is
-/// not used. The SVG is written in the layout's paper units, relative to
+/// paper space (`padding` and `crop` as `options` say). `space` is not
+/// used. The SVG is written in the layout's paper units, relative to
 /// [`ToSvgResult::origin`] like any render.
 ///
 /// A viewport that is off, or is the layout's overall viewport (the sheet
@@ -2459,6 +2525,7 @@ fn svg_result(scene: Scene, stroke_width: Option<f64>) -> ToSvgResult {
         hidden: scene.hidden,
         undrawn_viewports: scene.undrawn_viewports,
         view_box: scene.view_box,
+        crop: scene.crop,
     }
 }
 

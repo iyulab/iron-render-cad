@@ -7,7 +7,7 @@
 //! output. The viewBox is the extent (padding 0, no outlier trim), written
 //! as `x, -max_y, width, height`.
 
-use iron_render_cad::{to_svg, Space, ToSvgOptions, ToSvgResult};
+use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions, ToSvgResult};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, LwPolylineEntity, Origin, Point2D, Point3D,
     PolylineVertex, Ref,
@@ -58,7 +58,7 @@ fn render(db: &CadDatabase) -> ToSvgResult {
         ToSvgOptions {
             space: Space::All,
             padding: 0.0,
-            outlier_trim: false,
+            crop: Crop::Everything,
             ..ToSvgOptions::default()
         },
     )

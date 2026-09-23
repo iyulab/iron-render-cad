@@ -7,7 +7,7 @@
 
 use std::collections::BTreeMap;
 
-use iron_render_cad::{to_png, to_svg, Space, ToPngOptions, ToSvgOptions, ToSvgResult};
+use iron_render_cad::{to_png, to_svg, Crop, Space, ToPngOptions, ToSvgOptions, ToSvgResult};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, InsertEntity, LineEntity, Origin, Point3D, Ref,
 };
@@ -18,7 +18,7 @@ fn options(space: Space, include_hidden: bool) -> ToSvgOptions {
     ToSvgOptions {
         space,
         padding: 0.0,
-        outlier_trim: false,
+        crop: Crop::Everything,
         include_hidden,
         ..ToSvgOptions::default()
     }

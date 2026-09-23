@@ -12,7 +12,10 @@
 //! any subset of the parts, at any stroke width.
 
 use super::bounds::Box2D;
-use super::{infinite, resolve_stroke_widths, sheet, Hidden, LayoutError, ToSvgOptions};
+use super::{
+    infinite, resolve_stroke_widths, sheet, CropReport, Hidden, LayoutError, LeftOutReason,
+    ToSvgOptions,
+};
 use crate::limits::LimitReport;
 use uncad_model::model::{EntityId, Point2D};
 use uncad_model::CadDatabase;
@@ -105,6 +108,12 @@ pub struct Part {
     /// drawn only with [`ToSvgOptions::include_hidden`] (faded), and is
     /// counted in [`Scene::hidden`] either way.
     pub hidden: Option<Hidden>,
+    /// Whether the picture leaves the entity out, and why -- see
+    /// [`CropReport::left_out`]. A part set aside as an outlier
+    /// ([`LeftOutReason::ScaleOutlier`], [`LeftOutReason::FarOutlier`]) is
+    /// not in [`crate::to_svg`]'s document; one outside the view is, beyond
+    /// what the viewBox shows.
+    pub left_out: Option<LeftOutReason>,
     /// `true` for the part of a layout's sheet ([`Scene::layout`]) that is
     /// the model drawn through the viewport [`id`](Self::id): one such part
     /// per viewport that shows the model, after the sheet's own entities,
@@ -151,6 +160,7 @@ pub struct Scene {
     pub limits: LimitReport,
     pub hidden: usize,
     pub undrawn_viewports: Vec<EntityId>,
+    pub crop: CropReport,
 }
 
 /// The document-frame viewBox `[x, y, width, height]` of `window` for a
@@ -209,7 +219,8 @@ impl Scene {
     /// `(window.min_x - origin.x, origin.y - window.max_y, width, height)`.
     /// With `window` the scene's [`view_box`](Self::view_box), the stroke
     /// width [`auto_stroke_width`](Self::auto_stroke_width) and every part
-    /// kept, it is [`crate::to_svg`]'s document, byte for byte.
+    /// kept but the outliers the crop set aside ([`Part::left_out`]), it is
+    /// [`crate::to_svg`]'s document, byte for byte.
     pub fn svg(&self, window: Rect, stroke_width: f64, keep: impl Fn(&Part) -> bool) -> String {
         // The scene's own view box is written exactly as the render framed
         // it: going through world units and back can move its last bit.
@@ -221,10 +232,15 @@ impl Scene {
         self.assemble(view_box, stroke_width, |i| keep(&self.parts[i]))
     }
 
-    /// The document of every part at `stroke_width`: what
-    /// [`crate::to_svg`] writes.
+    /// The document of every part the crop did not set aside, at
+    /// `stroke_width`: what [`crate::to_svg`] writes.
     pub(crate) fn document(&self, stroke_width: f64) -> String {
-        self.assemble(self.doc_view_box, stroke_width, |_| true)
+        self.assemble(self.doc_view_box, stroke_width, |i| {
+            !matches!(
+                self.parts[i].left_out,
+                Some(LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier)
+            )
+        })
     }
 
     /// [`view_box`](Self::view_box) as the document writes it.

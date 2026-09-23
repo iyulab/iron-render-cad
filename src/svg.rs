@@ -18,10 +18,8 @@
 //! and [`bounds`] (viewBox and outlier trim).
 
 mod bounds;
-mod bulge;
 mod format;
 mod hatch;
-mod ocs;
 mod spline;
 mod text_codes;
 
@@ -30,12 +28,13 @@ use bounds::{dominant_cluster_box, Box2D};
 use format::{clean, escape_xml, neg, points_attr, rotate_transform_attr, xy};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
+use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
     ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, LightType,
     LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D, PolylineVertex,
 };
 use uncad_model::tables::Tables;
-use uncad_model::{Affine2, CadDatabase};
+use uncad_model::{Affine2, CadDatabase, Ocs};
 
 /// Which of a drawing's spaces to render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -331,16 +330,15 @@ const OWN_PLANE_SAMPLES: usize = 64;
 
 /// The coordinate system a CIRCLE or ARC is written in. An extrusion that
 /// names no plane (zero, or not finite) is drawn in the world's.
-fn own_plane(extrusion: Point3D) -> ocs::Ocs {
-    ocs::Ocs::of(extrusion)
-        .or_else(|| {
-            ocs::Ocs::of(Point3D {
-                x: 0.0,
-                y: 0.0,
-                z: 1.0,
-            })
-        })
-        .expect("the world Z axis names a plane")
+fn own_plane(extrusion: Point3D) -> Ocs {
+    Ocs::of(extrusion).unwrap_or(Ocs::WORLD)
+}
+
+/// A point of `plane` in world coordinates, seen from above: the page is the
+/// world XY plane, so the world z is dropped.
+fn seen_from_above(plane: Ocs, p: Point3D) -> Point2D {
+    let w = plane.to_world(p);
+    Point2D { x: w.x, y: w.y }
 }
 
 /// A CIRCLE whose extrusion is not the world Z axis. Facing down (a mirror
@@ -348,8 +346,8 @@ fn own_plane(extrusion: Point3D) -> ocs::Ocs {
 /// plane it is seen from above, so it is drawn through points of its outline.
 fn circle_in_own_plane(c: &CircleEntity, color: &str, ctx: &mut Ctx) -> String {
     let plane = own_plane(c.extrusion);
-    if plane.flat() {
-        let center = plane.to_world_xy(c.center);
+    if plane.is_flat() {
+        let center = seen_from_above(plane, c.center);
         ctx.consider(center.x - c.radius, center.y - c.radius);
         ctx.consider(center.x + c.radius, center.y + c.radius);
         return format!(
@@ -362,7 +360,7 @@ fn circle_in_own_plane(c: &CircleEntity, color: &str, ctx: &mut Ctx) -> String {
     let points: Vec<Point2D> = (0..OWN_PLANE_SAMPLES)
         .map(|i| {
             let a = std::f64::consts::TAU * i as f64 / OWN_PLANE_SAMPLES as f64;
-            plane.to_world_xy(on_circle(c.center, c.radius, a))
+            seen_from_above(plane, on_circle(c.center, c.radius, a))
         })
         .collect();
     ctx.consider_all(&points);
@@ -379,10 +377,10 @@ fn arc_in_own_plane(a: &ArcEntity, color: &str, ctx: &mut Ctx) -> String {
     if sweep < 0.0 {
         sweep += std::f64::consts::TAU;
     }
-    let start = plane.to_world_xy(on_circle(a.center, a.radius, a.start_angle));
-    let end = plane.to_world_xy(on_circle(a.center, a.radius, a.end_angle));
-    if plane.flat() {
-        let center = plane.to_world_xy(a.center);
+    let start = seen_from_above(plane, on_circle(a.center, a.radius, a.start_angle));
+    let end = seen_from_above(plane, on_circle(a.center, a.radius, a.end_angle));
+    if plane.is_flat() {
+        let center = seen_from_above(plane, a.center);
         ctx.consider(center.x - a.radius, center.y - a.radius);
         ctx.consider(center.x + a.radius, center.y + a.radius);
         let r = a.radius;
@@ -401,7 +399,7 @@ fn arc_in_own_plane(a: &ArcEntity, color: &str, ctx: &mut Ctx) -> String {
     let points: Vec<Point2D> = (0..=steps)
         .map(|i| {
             let t = a.start_angle + sweep * i as f64 / steps as f64;
-            plane.to_world_xy(on_circle(a.center, a.radius, t))
+            seen_from_above(plane, on_circle(a.center, a.radius, t))
         })
         .collect();
     ctx.consider_all(&points);
@@ -433,12 +431,12 @@ fn polyline_drawn(vertices: &[PolylineVertex], closed: bool, color: &str, ctx: &
 /// own coordinate system, then every point taken to the world.
 fn polyline_on_tilted_plane(
     p: &LwPolylineEntity,
-    plane: ocs::Ocs,
+    plane: Ocs,
     color: &str,
     ctx: &mut Ctx,
 ) -> String {
     let mut own: Vec<Point2D> = Vec::new();
-    for (from, _, arc) in bulge::segments(&p.vertices, p.closed) {
+    for Segment { from, arc, .. } in bulge::segments(&p.vertices, p.closed) {
         own.push(from);
         if let Some(arc) = arc {
             let steps = 12;
@@ -455,11 +453,14 @@ fn polyline_on_tilted_plane(
     let world: Vec<Point2D> = own
         .into_iter()
         .map(|q| {
-            plane.to_world_xy(Point3D {
-                x: q.x,
-                y: q.y,
-                z: p.elevation,
-            })
+            seen_from_above(
+                plane,
+                Point3D {
+                    x: q.x,
+                    y: q.y,
+                    z: p.elevation,
+                },
+            )
         })
         .collect();
     ctx.consider_all(&world);
@@ -477,7 +478,7 @@ fn bulged_polyline_element(
 ) -> String {
     let first = vertices[0].point;
     let mut d = format!("M {} {}", clean(first.x), neg(first.y));
-    for (_, to, arc) in bulge::segments(vertices, closed) {
+    for Segment { to, arc, .. } in bulge::segments(vertices, closed) {
         match arc {
             Some(arc) => {
                 for e in arc.extremes() {
@@ -838,18 +839,21 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             if plane.is_world() {
                 return Some(polyline_drawn(&p.vertices, p.closed, &color, ctx));
             }
-            if plane.flat() {
+            if plane.is_flat() {
                 // A mirror copy: its vertices taken to the world, and every
                 // arc turning the other way there.
                 let world: Vec<PolylineVertex> = p
                     .vertices
                     .iter()
                     .map(|v| PolylineVertex {
-                        point: plane.to_world_xy(Point3D {
-                            x: v.point.x,
-                            y: v.point.y,
-                            z: p.elevation,
-                        }),
+                        point: seen_from_above(
+                            plane,
+                            Point3D {
+                                x: v.point.x,
+                                y: v.point.y,
+                                z: p.elevation,
+                            },
+                        ),
                         bulge: -v.bulge,
                     })
                     .collect();
@@ -960,11 +964,14 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 // A quadrilateral of straight edges stays one seen from
                 // above, so this is exact on a tilted plane too.
                 for p in &mut pts {
-                    *p = plane.to_world_xy(Point3D {
-                        x: p.x,
-                        y: p.y,
-                        z: s.elevation,
-                    });
+                    *p = seen_from_above(
+                        plane,
+                        Point3D {
+                            x: p.x,
+                            y: p.y,
+                            z: s.elevation,
+                        },
+                    );
                 }
             }
             ctx.consider_all(&pts);

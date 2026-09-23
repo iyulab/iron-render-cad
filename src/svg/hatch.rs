@@ -2,9 +2,10 @@
 //! tiled through SVG's own `<pattern>` element.
 
 use super::format::{clean, neg};
-use super::{bulge, Ctx};
+use super::Ctx;
 use crate::color::{tint_toward_white, true_color_to_hex, DEFAULT_COLOR};
 use std::fmt::Write as _;
+use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
     HatchBoundaryPath, HatchEdge, HatchEntity, HatchGradient, HatchPatternLine, Point2D,
     PolylineVertex,
@@ -89,7 +90,7 @@ fn arc_sweep(start_angle: f64, end_angle: f64, is_ccw: bool) -> f64 {
 /// the last vertex's bulge is the segment back to the first.
 fn polyline_path_points(vertices: &[PolylineVertex]) -> Vec<Point2D> {
     let mut points = Vec::new();
-    for (from, _, arc) in bulge::segments(vertices, true) {
+    for Segment { from, arc, .. } in bulge::segments(vertices, true) {
         points.push(from);
         if let Some(arc) = arc {
             let segments = 12;

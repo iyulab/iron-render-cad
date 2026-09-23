@@ -8,7 +8,9 @@
 //! the model does not hold in [`ToSvgResult::unresolved_block_refs`], and
 //! what the bounds on the file's numbers left out in
 //! [`ToSvgResult::limits`] -- rather than dropped in silence -- and what the
-//! drawing itself hides is counted in [`ToSvgResult::hidden`]. A render is
+//! drawing itself hides is counted in [`ToSvgResult::hidden`]. A paper
+//! layout can be drawn as its sheet, with the model shown through its
+//! viewports ([`layout_to_svg`], [`layout_to_png`]). A render is
 //! for people and for an agent's fallback view; it is never evidence that a
 //! drawing or an edit is correct.
 //!
@@ -24,7 +26,9 @@ mod svg;
 mod text;
 
 pub use png::{
-    svg_to_png, to_png, Background, Fonts, PngError, PngSize, ToPngOptions, ToPngResult,
-    DEFAULT_MAX_EDGE,
+    layout_to_png, svg_to_png, to_png, Background, Fonts, PngError, PngSize, ToPngOptions,
+    ToPngResult, DEFAULT_MAX_EDGE,
 };
-pub use svg::{to_svg, Space, ToSvgOptions, ToSvgResult, DEFAULT_CAP_HEIGHT};
+pub use svg::{
+    layout_to_svg, to_svg, LayoutError, Space, ToSvgOptions, ToSvgResult, DEFAULT_CAP_HEIGHT,
+};

@@ -32,6 +32,12 @@ pub(super) fn bbox_of(group: &[Box2D]) -> Box2D {
     b
 }
 
+/// Whether two rectangles share a point: overlapping, or touching at an
+/// edge or a corner.
+pub(super) fn intersects(a: &Box2D, b: &Box2D) -> bool {
+    a.min_x <= b.max_x && b.min_x <= a.max_x && a.min_y <= b.max_y && b.min_y <= a.max_y
+}
+
 /// Shortest distance between two rectangles; 0 when they overlap.
 pub(super) fn rect_gap(a: &Box2D, b: &Box2D) -> f64 {
     let dx = (a.min_x - b.max_x).max(b.min_x - a.max_x).max(0.0);
@@ -244,6 +250,15 @@ mod tests {
         assert_eq!(percentile(&sorted, 0.25), 2.0);
         assert_eq!(percentile(&sorted, 0.75), 4.0);
         assert_eq!(percentile(&[], 0.5), 0.0);
+    }
+
+    #[test]
+    fn rectangles_intersect_when_they_share_a_point() {
+        let a = bx(0.0, 0.0, 1.0, 1.0);
+        assert!(intersects(&a, &bx(0.5, 0.5, 2.0, 2.0)));
+        assert!(intersects(&a, &bx(1.0, 1.0, 2.0, 2.0)), "a shared corner");
+        assert!(!intersects(&a, &bx(1.5, 0.0, 2.0, 1.0)));
+        assert!(!intersects(&a, &bx(0.0, -2.0, 1.0, -1.5)));
     }
 
     #[test]

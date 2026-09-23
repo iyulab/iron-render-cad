@@ -30,8 +30,12 @@ mod infinite;
 mod justify;
 mod ocs;
 mod polyline;
+mod sheet;
 mod spline;
 mod visibility;
+
+pub(crate) use sheet::render_layout;
+pub use sheet::LayoutError;
 
 use crate::color::{effective_layer, resolve_color, DEFAULT_COLOR};
 use crate::limits::{
@@ -138,8 +142,19 @@ pub struct ToSvgResult {
     /// [`ToSvgOptions::include_hidden`]), block contents included: a hidden
     /// entity in a block referenced twice counts twice, and the contents of
     /// a hidden block reference are not visited at all. Left out of the
-    /// picture, or drawn faded when asked, and never part of the extent.
+    /// picture, or drawn faded when asked, and never part of the extent. In
+    /// a layout's sheet ([`layout_to_svg`]) the model is walked once per
+    /// viewport that shows it, and an entity on a layer frozen in that
+    /// viewport alone counts too.
     pub hidden: usize,
+    /// For a layout's sheet ([`layout_to_svg`]): the viewports that are on
+    /// and are windows onto the model, but whose view this renderer does
+    /// not draw through them -- one the file does not state (a viewport
+    /// older than R2000 keeps it where the model does not read it), one of
+    /// no positive height or frame, or one not looking straight down the z
+    /// axis (a 3D view). Each one's frame is drawn and nothing is shown in
+    /// it. By reference ID, sorted. Always empty for [`to_svg`].
+    pub undrawn_viewports: Vec<EntityId>,
     /// The world point the SVG's coordinates are written relative to: an
     /// SVG user unit at `(u, v)` is the world point `(origin.x + u,
     /// origin.y - v)`, the viewBox included. `(0, 0)` -- the SVG reads in
@@ -260,12 +275,48 @@ struct Ctx<'a> {
     cap_height: f64,
     /// [`ToSvgOptions::include_hidden`].
     include_hidden: bool,
+    /// The layers frozen in the viewport being drawn through (see
+    /// [`sheet`]); empty everywhere else.
+    viewport_frozen: BTreeSet<String>,
     /// Entities [`render_entity`] found hidden (see
     /// [`ToSvgResult::hidden`]).
     hidden: usize,
 }
 
 impl<'a> Ctx<'a> {
+    /// A context for a render written about `origin`, set up as `options`
+    /// say.
+    fn configured(tables: &'a Tables, options: &ToSvgOptions, origin: Point2D) -> Self {
+        let mut ctx = Ctx::new(tables);
+        ctx.frame = Frame {
+            ox: origin.x,
+            oy: origin.y,
+        };
+        if options.cap_height.is_finite() && options.cap_height > 0.0 {
+            ctx.cap_height = options.cap_height;
+        }
+        ctx.include_hidden = options.include_hidden;
+        ctx
+    }
+
+    /// The render this context has walked, with `body` as its parts in
+    /// drawing order (empty ones are dropped).
+    fn finish(self, body: Vec<String>, view_box: ViewBox, origin: Point2D) -> Rendered {
+        Rendered {
+            body: body.into_iter().filter(|svg| !svg.is_empty()).collect(),
+            defs: self.defs,
+            view_box: view_box.rect,
+            auto_stroke_width: view_box.auto_stroke_width,
+            unsupported_types: self.unsupported.into_iter().collect(),
+            empty_blocks: self.empty_blocks.into_iter().collect(),
+            unresolved_block_refs: self.unresolved_block_refs.into_iter().collect(),
+            limits: self.limits,
+            origin,
+            hidden: self.hidden,
+            undrawn_viewports: Vec::new(),
+        }
+    }
+
     fn new(tables: &'a Tables) -> Self {
         Ctx {
             ent_min_x: f64::INFINITY,
@@ -292,6 +343,7 @@ impl<'a> Ctx<'a> {
             limits: LimitReport::default(),
             cap_height: DEFAULT_CAP_HEIGHT,
             include_hidden: false,
+            viewport_frozen: BTreeSet::new(),
             hidden: 0,
         }
     }
@@ -904,7 +956,13 @@ fn render_block_ref(
 fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     // The drawing hides it: not drawn -- or drawn faded, when asked -- and
     // not part of the extent either way.
-    let hidden = visibility::hidden_reason(e, ctx.tables, ctx.inherited_layer.as_deref()).is_some();
+    let hidden = visibility::hidden_reason(
+        e,
+        ctx.tables,
+        ctx.inherited_layer.as_deref(),
+        &ctx.viewport_frozen,
+    )
+    .is_some();
     if hidden {
         ctx.hidden += 1;
         if !ctx.include_hidden {
@@ -1885,15 +1943,24 @@ fn select_entities_for_space(db: &CadDatabase, space: Space) -> Vec<&Entity> {
     if space == Space::All {
         return db.entities.iter().collect();
     }
-    let mut ids: BTreeSet<EntityId> = BTreeSet::new();
-    for (name, record) in &db.tables.block_records {
+    select_owned_by(db, |name| {
         let upper = name.to_uppercase();
-        let matches = match space {
+        match space {
             Space::Model => upper == "*MODEL_SPACE",
             Space::Paper => upper.starts_with("*PAPER_SPACE"),
             Space::All => unreachable!(),
-        };
-        if !matches {
+        }
+    })
+}
+
+/// The top-level entities the blocks `owns` accepts (by name) own, in the
+/// order `db.entities` lists them: each block's own entities, and the
+/// attribute values of its block references, which the model lists at the
+/// top level beside them.
+fn select_owned_by(db: &CadDatabase, owns: impl Fn(&str) -> bool) -> Vec<&Entity> {
+    let mut ids: BTreeSet<EntityId> = BTreeSet::new();
+    for (name, record) in &db.tables.block_records {
+        if !owns(name) {
             continue;
         }
         for e in &record.entities {
@@ -2019,36 +2086,43 @@ pub(crate) struct Rendered {
     pub(crate) limits: LimitReport,
     pub(crate) origin: Point2D,
     pub(crate) hidden: usize,
+    /// See [`ToSvgResult::undrawn_viewports`]; empty but for a layout.
+    pub(crate) undrawn_viewports: Vec<EntityId>,
 }
 
 /// Renders every entity of `options.space`, measures the extent and settles
-/// the viewBox, leaving the stroke width unresolved.
-///
-/// `outlier_trim` (default `true`) computes the viewBox from the dominant
-/// spatially-connected cluster of entities instead of the raw min/max -- see
-/// [`bounds`] for why.
+/// the viewBox (see [`fitted_view_box`]), leaving the stroke width
+/// unresolved.
 pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Rendered {
-    let mut entity_boxes: Vec<Box2D> = Vec::new();
-    let mut body: Vec<String> = Vec::new();
-
     let selected = select_entities_for_space(db, options.space);
     let origin = choose_origin(&selected);
-    let mut ctx = Ctx::new(&db.tables);
-    ctx.frame = Frame {
-        ox: origin.x,
-        oy: origin.y,
-    };
-    if options.cap_height.is_finite() && options.cap_height > 0.0 {
-        ctx.cap_height = options.cap_height;
-    }
-    ctx.include_hidden = options.include_hidden;
+    let mut ctx = Ctx::configured(&db.tables, &options, origin);
+    let parts = walk(&selected, &mut ctx);
+    let boxes: Vec<Box2D> = parts.iter().filter_map(|p| p.extent).collect();
+    let view_box = fitted_view_box(&boxes, &options, origin);
+    ctx.finish(parts.into_iter().map(|p| p.svg).collect(), view_box, origin)
+}
+
+/// What one top-level entity drew -- empty when it drew nothing -- and the
+/// extent it measured, in the coordinates `ctx.transform` takes it to.
+struct Part {
+    svg: String,
+    extent: Option<Box2D>,
+}
+
+/// Renders each of `selected` as one top-level part, in order. An entity
+/// whose extent reaches past what a viewBox can be built from is left out
+/// and reported; one cut short by the per-entity budget is kept and
+/// reported as truncated.
+fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<Part> {
+    let mut parts = Vec::new();
     for e in selected {
         ctx.reset_entity_bounds();
         ctx.entity_start = ctx.emitted;
         ctx.part_truncated = false;
-        let svg = render_entity(e, &mut ctx);
-        let entity_box = ctx.entity_box();
-        if entity_box.is_some_and(|b| !within_world(&b)) {
+        let svg = render_entity(e, ctx);
+        let extent = ctx.entity_box();
+        if extent.is_some_and(|b| !within_world(&b)) {
             // Past what a viewBox -- and the stroke width, padding and dash
             // lengths derived from it -- can be built from.
             ctx.limits.out_of_range_entities += 1;
@@ -2056,61 +2130,74 @@ pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Rendered {
                 .note(Cap::OutOfRange, e.common().id, e.type_name());
             continue;
         }
-        if let Some(svg) = svg {
-            if ctx.part_truncated {
-                // What the entity drew before its budget ran out is kept;
-                // the report says the part is incomplete.
-                ctx.limits.truncated_parts += 1;
-                ctx.limits
-                    .note(Cap::EntityBytes, e.common().id, e.type_name());
+        let svg = match svg {
+            Some(svg) => {
+                if ctx.part_truncated {
+                    // What the entity drew before its budget ran out is
+                    // kept; the report says the part is incomplete.
+                    ctx.limits.truncated_parts += 1;
+                    ctx.limits
+                        .note(Cap::EntityBytes, e.common().id, e.type_name());
+                }
+                svg
             }
-            if !svg.is_empty() {
-                body.push(svg);
-            }
-        }
-        if let Some(b) = entity_box {
-            entity_boxes.push(b);
+            None => String::new(),
+        };
+        if !svg.is_empty() || extent.is_some() {
+            parts.push(Part { svg, extent });
         }
     }
+    parts
+}
 
+/// The viewBox, as the document writes it, that shows `boxes` -- trimmed
+/// of outliers and padded as `options` say -- and its automatic stroke
+/// width.
+///
+/// `outlier_trim` (default `true`) computes the viewBox from the dominant
+/// spatially-connected cluster of entities instead of the raw min/max --
+/// see [`bounds`] for why.
+fn fitted_view_box(boxes: &[Box2D], options: &ToSvgOptions, origin: Point2D) -> ViewBox {
     // Every point measured belongs to exactly one top-level entity's box,
     // so the boxes' own extent is the extent of every point.
-    let raw_bounds = || bbox_of(&entity_boxes);
-    let bounds = if entity_boxes.is_empty() {
+    let raw_bounds = || bbox_of(boxes);
+    let bounds = if boxes.is_empty() {
         Box2D {
             min_x: 0.0,
             max_x: 0.0,
             min_y: 0.0,
             max_y: 0.0,
         }
-    } else if options.outlier_trim && entity_boxes.len() > 2 {
-        dominant_cluster_box(&entity_boxes).unwrap_or_else(raw_bounds)
+    } else if options.outlier_trim && boxes.len() > 2 {
+        dominant_cluster_box(boxes).unwrap_or_else(raw_bounds)
     } else {
         raw_bounds()
     };
+    view_box_of(&bounds, options.padding, origin)
+}
 
-    // The viewBox in world units, then written in the render's frame like
-    // every coordinate inside it.
-    let x = bounds.min_x - options.padding - origin.x;
-    let y = -bounds.max_y - options.padding + origin.y;
-    let width = (bounds.max_x - bounds.min_x) + options.padding * 2.0;
-    let height = (bounds.max_y - bounds.min_y) + options.padding * 2.0;
+/// A viewBox and the stroke width [`to_svg`] uses when none is given.
+struct ViewBox {
+    /// `x, y, width, height`, in the render's frame.
+    rect: [f64; 4],
+    /// ~1/6000th of the padded extent's diagonal, floored at 0.01.
+    auto_stroke_width: f64,
+}
+
+/// The viewBox showing the world box `bounds` with `padding` around it,
+/// written in the frame whose origin is `origin`, like every coordinate
+/// inside it. A degenerate (zero-size) extent still gets a 1 x 1 canvas.
+fn view_box_of(bounds: &Box2D, padding: f64, origin: Point2D) -> ViewBox {
+    let x = bounds.min_x - padding - origin.x;
+    let y = -bounds.max_y - padding + origin.y;
+    let width = (bounds.max_x - bounds.min_x) + padding * 2.0;
+    let height = (bounds.max_y - bounds.min_y) + padding * 2.0;
     let auto_stroke_width = (width.hypot(height) / 6000.0).max(0.01);
-    // A degenerate (zero-size) extent still gets a 1 x 1 canvas.
     let width = if width != 0.0 { width } else { 1.0 };
     let height = if height != 0.0 { height } else { 1.0 };
-
-    Rendered {
-        body,
-        defs: ctx.defs,
-        view_box: [x, y, width, height],
+    ViewBox {
+        rect: [x, y, width, height],
         auto_stroke_width,
-        unsupported_types: ctx.unsupported.into_iter().collect(),
-        empty_blocks: ctx.empty_blocks.into_iter().collect(),
-        unresolved_block_refs: ctx.unresolved_block_refs.into_iter().collect(),
-        limits: ctx.limits,
-        origin,
-        hidden: ctx.hidden,
     }
 }
 
@@ -2147,8 +2234,43 @@ pub(crate) fn assemble(rendered: &Rendered, stroke_width: f64) -> String {
 /// rather than a fixed value; see [`stroke_width_placeholder`] for how nested
 /// block references keep a constant visual weight.
 pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
-    let rendered = render(db, options);
-    let stroke_width = options.stroke_width.unwrap_or(rendered.auto_stroke_width);
+    svg_result(render(db, options), options.stroke_width)
+}
+
+/// Renders the paper layout named `layout` (a key of `tables.layouts`) as
+/// its sheet: the layout's own entities, and the model shown through each
+/// of its viewports -- at the viewport's scale (its frame's height over its
+/// view's), turned by its twist, clipped to its frame, without the layers
+/// frozen in it. The viewBox is the sheet: the layout's limits when they
+/// span a rectangle, else the paper its plot settings describe, with no
+/// padding; a layout that states neither is framed like a render of its
+/// paper space (`padding` and `outlier_trim` as `options` say). `space` is
+/// not used. The SVG is written in the layout's paper units, relative to
+/// [`ToSvgResult::origin`] like any render.
+///
+/// A viewport that is off, or is the layout's overall viewport (the sheet
+/// itself), shows nothing; one whose view cannot be drawn is reported in
+/// [`ToSvgResult::undrawn_viewports`]. Every viewport's frame is drawn as
+/// paper space draws it, hidden when its layer is -- and its view is shown
+/// either way.
+///
+/// An error when the model holds no such layout, when it is the model tab,
+/// or when its paper space block is not in the model.
+pub fn layout_to_svg(
+    db: &CadDatabase,
+    layout: &str,
+    options: ToSvgOptions,
+) -> Result<ToSvgResult, LayoutError> {
+    Ok(svg_result(
+        sheet::render_layout(db, layout, options)?,
+        options.stroke_width,
+    ))
+}
+
+/// [`assemble`]s `rendered` at `stroke_width`, or at its own automatic
+/// width when none is given.
+fn svg_result(rendered: Rendered, stroke_width: Option<f64>) -> ToSvgResult {
+    let stroke_width = stroke_width.unwrap_or(rendered.auto_stroke_width);
     ToSvgResult {
         svg: assemble(&rendered, stroke_width),
         unsupported_types: rendered.unsupported_types,
@@ -2157,6 +2279,7 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         limits: rendered.limits,
         origin: rendered.origin,
         hidden: rendered.hidden,
+        undrawn_viewports: rendered.undrawn_viewports,
     }
 }
 

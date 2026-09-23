@@ -29,7 +29,9 @@ useful than a gap -- but a reader should know which parts are approximate:
   is a closed 2D profile, so usually) is drawn in plan, where the file puts it; a body with
   depth is projected isometrically.
 - **VIEWPORT and WIPEOUT as outlines**: a viewport's frame, a wipeout's clip boundary;
-  neither the viewport's contents nor the wipeout's masking are rendered.
+  neither the viewport's contents nor the wipeout's masking are rendered by `to_svg` and
+  `to_png`. A layout's sheet (`layout_to_svg`, `layout_to_png`) does show the model through
+  its viewports; see below.
 - **TOLERANCE as plain text**: the feature-control-frame string is drawn as text, with its
   symbol escapes unstripped. A frame whose file states no height is drawn at the text
   height (DIMTXT) of the dimension style it names, and at 1 when that states none either.
@@ -135,6 +137,36 @@ model places a block reference.
 An INSERT is placed by the model's own `Affine2::from_insert`, which applies its extrusion the
 same way. A HATCH is drawn as its boundary is stated: the model carries no extrusion for it,
 so a mirrored HATCH lands on the other side of the y axis from the geometry around it.
+
+## A paper layout's sheet
+
+`layout_to_svg` and `layout_to_png` draw one paper layout as its sheet: the layout's own
+entities (its paper space block), and the model shown through each of its viewports, clipped
+to the viewport's frame. The model appears at the viewport's scale -- its frame's height over
+its view's -- and turned by its twist, a model point `p` landing at
+`C + s (R(twist) (p - T) - V)` on the paper (`C` the frame's centre, `T` the view's target,
+`V` its centre in display coordinates). A positive twist turns the picture counter-clockwise,
+the convention ezdxf follows; the sign has not been checked against a sheet AutoCAD plotted.
+Strokes, POINT crosses and HATCH pattern lines inside a viewport are drawn at the sheet's
+stroke width, and each viewport gets its own copy of the patterns it fills with.
+
+- The sheet is the layout's limits when they span a rectangle -- AutoCAD keeps them equal to
+  the paper's placement -- and otherwise the paper its plot settings describe: the paper's
+  size (turned for a quarter-turned plot, divided by 25.4 for a layout drawn in inches) with
+  the printable area's lower-left corner, moved by the plot origin, at the layout's origin.
+  A layout that states neither is framed like a render of its paper space. No padding.
+- A viewport that is off, or is the layout's overall viewport (numbered 1 in a DXF; in a DWG,
+  which numbers none, the one whose view is its own frame), shows nothing. So does a viewport
+  whose view the renderer cannot draw -- none stated (older than R2000), no positive height,
+  or not a plan view (a 3D view) -- and it is reported in `undrawn_viewports`. Every
+  viewport's frame is drawn as paper space draws it, and hidden when its layer is: a
+  viewport on a layer that is off or not plotted still shows its view.
+- Inside a viewport the model follows the hidden rules above, and the layers frozen in that
+  viewport alone are hidden too (counted in `hidden`, faded with `include_hidden`). The model
+  is walked once per viewport that shows it, so what it hides counts once per viewport.
+- Only the model entities whose extent meets the frame are written into a viewport; a RAY or
+  XLINE always is, and is cut at the sheet's edge.
+- A perspective view's lens length is not applied: a plan view is parallel.
 
 ## A far-away drawing is written about its own middle
 

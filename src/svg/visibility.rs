@@ -7,6 +7,7 @@
 //! extent.
 
 use crate::color::effective_layer;
+use std::collections::BTreeSet;
 use uncad_model::model::Entity;
 use uncad_model::tables::Tables;
 
@@ -24,6 +25,9 @@ pub(super) enum Hidden {
     LayerOff,
     /// The layer is frozen.
     LayerFrozen,
+    /// The layer is frozen in the viewport the entity is drawn through
+    /// (a paper layout's, see `svg::sheet`).
+    FrozenInViewport,
     /// The layer is stated not to plot. A layer whose file does not say
     /// (`plot: None`) plots.
     LayerNoPlot,
@@ -35,12 +39,15 @@ const DEFPOINTS: &str = "DEFPOINTS";
 /// Why the drawing hides `e`, or `None` when it shows it. `reference_layer`
 /// is the effective layer of the block reference `e` is drawn inside --
 /// `None` at the top level -- which an entity on layer 0 takes as its own
-/// (see [`effective_layer`]). A layer the model does not hold, or one the
-/// entity does not resolve to, is shown: nothing says otherwise.
+/// (see [`effective_layer`]); `frozen_here` the layers frozen in the
+/// viewport it is drawn through, empty outside one. A layer the model does
+/// not hold, or one the entity does not resolve to, is shown unless the
+/// viewport freezes it: nothing says otherwise.
 pub(super) fn hidden_reason(
     e: &Entity,
     tables: &Tables,
     reference_layer: Option<&str>,
+    frozen_here: &BTreeSet<String>,
 ) -> Option<Hidden> {
     let common = e.common();
     if common.invisible || matches!(e, Entity::Attrib(a) if a.flags.invisible) {
@@ -50,12 +57,14 @@ pub(super) fn hidden_reason(
     if layer.eq_ignore_ascii_case(DEFPOINTS) {
         return Some(Hidden::Defpoints);
     }
-    let record = tables.layers.get(layer)?;
-    if record.off {
+    let record = tables.layers.get(layer);
+    if record.is_some_and(|r| r.off) {
         Some(Hidden::LayerOff)
-    } else if record.frozen {
+    } else if record.is_some_and(|r| r.frozen) {
         Some(Hidden::LayerFrozen)
-    } else if record.plot == Some(false) {
+    } else if frozen_here.contains(layer) {
+        Some(Hidden::FrozenInViewport)
+    } else if record.is_some_and(|r| r.plot == Some(false)) {
         Some(Hidden::LayerNoPlot)
     } else {
         None
@@ -131,7 +140,8 @@ mod tests {
     #[test]
     fn each_reason_in_its_order() {
         let t = tables();
-        let reason = |e: &Entity| hidden_reason(e, &t, None);
+        let none = BTreeSet::new();
+        let reason = |e: &Entity| hidden_reason(e, &t, None, &none);
         assert_eq!(reason(&named("SHOWN")), None);
         assert_eq!(reason(&named("PLOTTED")), None);
         assert_eq!(reason(&named("OFF")), Some(Hidden::LayerOff));
@@ -156,18 +166,34 @@ mod tests {
     #[test]
     fn inside_a_block_layer_zero_is_the_references_layer() {
         let t = tables();
+        let none = BTreeSet::new();
         // Layer 0 is off here, but a child on it takes the reference's
         // layer; a child on its own layer keeps it.
-        assert_eq!(hidden_reason(&named("0"), &t, Some("SHOWN")), None);
+        assert_eq!(hidden_reason(&named("0"), &t, Some("SHOWN"), &none), None);
         assert_eq!(
-            hidden_reason(&named("0"), &t, Some("FROZEN")),
+            hidden_reason(&named("0"), &t, Some("FROZEN"), &none),
             Some(Hidden::LayerFrozen)
         );
         assert_eq!(
-            hidden_reason(&named("OFF"), &t, Some("SHOWN")),
+            hidden_reason(&named("OFF"), &t, Some("SHOWN"), &none),
             Some(Hidden::LayerOff)
         );
         // At the top level, layer 0 is layer 0.
-        assert_eq!(hidden_reason(&named("0"), &t, None), Some(Hidden::LayerOff));
+        assert_eq!(
+            hidden_reason(&named("0"), &t, None, &none),
+            Some(Hidden::LayerOff)
+        );
+    }
+
+    #[test]
+    fn a_viewport_freezes_its_own_layers_whether_or_not_the_model_holds_them() {
+        let t = tables();
+        let frozen: BTreeSet<String> = ["SHOWN", "UNLISTED"].map(String::from).into();
+        let reason = |e: &Entity| hidden_reason(e, &t, None, &frozen);
+        assert_eq!(reason(&named("SHOWN")), Some(Hidden::FrozenInViewport));
+        assert_eq!(reason(&named("UNLISTED")), Some(Hidden::FrozenInViewport));
+        assert_eq!(reason(&named("PLOTTED")), None);
+        // Frozen everywhere is still said as that.
+        assert_eq!(reason(&named("FROZEN")), Some(Hidden::LayerFrozen));
     }
 }

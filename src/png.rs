@@ -203,6 +203,9 @@ pub struct ToPngResult {
     pub limits: crate::limits::LimitReport,
     /// See [`ToSvgResult::hidden`](crate::ToSvgResult::hidden).
     pub hidden: usize,
+    /// See
+    /// [`ToSvgResult::undrawn_viewports`](crate::ToSvgResult::undrawn_viewports).
+    pub undrawn_viewports: Vec<uncad_model::EntityId>,
 }
 
 #[derive(Debug)]
@@ -234,6 +237,8 @@ pub enum PngError {
     /// returned here with its own message, so a caller gets an error
     /// instead of a dead process.
     RenderPanic(String),
+    /// [`layout_to_png`] has no sheet to draw.
+    Layout(crate::LayoutError),
 }
 
 impl std::fmt::Display for PngError {
@@ -251,6 +256,7 @@ impl std::fmt::Display for PngError {
             ),
             PngError::Encode(e) => write!(f, "PNG encoding failed: {e}"),
             PngError::RenderPanic(e) => write!(f, "the rasterizer panicked: {e}"),
+            PngError::Layout(e) => write!(f, "no sheet to draw: {e}"),
         }
     }
 }
@@ -266,7 +272,24 @@ impl std::error::Error for PngError {}
 /// rather than erroring -- usvg treats an unresolved glyph as empty, not a
 /// parse failure.
 pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, PngError> {
-    let rendered = svg::render(db, options.svg);
+    png_result(svg::render(db, options.svg), &options)
+}
+
+/// Renders the paper layout named `layout` straight to PNG bytes: the sheet
+/// [`crate::layout_to_svg`] would write, drawn at the size, stroke width,
+/// fonts and background `options` ask for. [`PngError::Layout`] when there
+/// is no such sheet to draw.
+pub fn layout_to_png(
+    db: &CadDatabase,
+    layout: &str,
+    options: ToPngOptions,
+) -> Result<ToPngResult, PngError> {
+    let rendered = svg::render_layout(db, layout, options.svg).map_err(PngError::Layout)?;
+    png_result(rendered, &options)
+}
+
+/// The PNG of a render, at `options`' size, stroke, fonts and background.
+fn png_result(rendered: svg::Rendered, options: &ToPngOptions) -> Result<ToPngResult, PngError> {
     let [_, _, width, height] = rendered.view_box;
     let px_per_unit = match options.size {
         PngSize::Scale(s) => f64::from(s),
@@ -295,6 +318,7 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
         unresolved_block_refs: rendered.unresolved_block_refs,
         limits: rendered.limits,
         hidden: rendered.hidden,
+        undrawn_viewports: rendered.undrawn_viewports,
     })
 }
 

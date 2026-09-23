@@ -171,6 +171,13 @@ pub(super) fn window(x: f64, y: f64, width: f64, height: f64, stroke_width: f64)
     ]
 }
 
+/// Whether `svg` holds a construction line's placeholder: a part that draws
+/// one reaches wherever the window it is cut to does, whatever its extent
+/// (its base point) says.
+pub(super) fn contains_placeholder(svg: &str) -> bool {
+    svg.contains(MARKER)
+}
+
 /// The placeholder a RAY or an XLINE emits in place of its element.
 pub(super) fn placeholder(line: &InfiniteLine, color: &str) -> String {
     let [a, b, c, d, e, f] = line.matrix;

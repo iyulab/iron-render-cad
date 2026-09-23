@@ -118,6 +118,7 @@ mod tests {
                 layer: Ref::Absent,
                 color_index: 7,
                 true_color: None,
+                invisible: false,
             },
             degree,
             closed: Some(false),

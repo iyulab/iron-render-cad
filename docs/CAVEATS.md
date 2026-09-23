@@ -28,6 +28,9 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **LEADER arrowheads only where the file states one**: a leader whose file omits the
   arrowhead flag is drawn without an arrowhead.
 - **MTEXT formatting codes are stripped**, not interpreted: the text is drawn plain.
+- **Invisible entities are not drawn**: an entity the drawing marks invisible (a dynamic
+  block's hidden visibility states) is left out, and does not count towards the extent. A
+  block reference whose block holds only such entities is reported in `empty_blocks`.
 - **MTEXT is placed by its attachment point**, one line per paragraph, with the line
   height taken as 1.2 times the text height times the spacing factor -- an estimate, since
   real line breaks and glyph metrics depend on the font. Where the drawing does not state

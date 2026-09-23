@@ -525,6 +525,10 @@ fn render_block_ref(
 /// while `consider` separately tracks world-space bounds through that same
 /// transform.
 fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
+    // The file hides it: not drawn, and not part of the drawing's extent.
+    if e.common().invisible {
+        return None;
+    }
     let color = resolve_entity_color(e.common(), ctx);
     match e {
         Entity::Line(l) => {
@@ -1074,6 +1078,7 @@ mod tests {
             layer: Ref::Absent,
             color_index: 0,
             true_color: None,
+            invisible: false,
         };
         let children: Vec<Entity> = (0..5)
             .map(|i| {
@@ -1294,6 +1299,7 @@ mod tests {
             layer: Ref::Absent,
             color_index: 7,
             true_color: None,
+            invisible: false,
         }
     }
 
@@ -1433,5 +1439,28 @@ mod tests {
         assert!((baseline - (-6.8 + 2.0)).abs() < 1e-12);
         // Unstated: the insertion point stays the first baseline.
         assert_eq!(mtext_placement(None, 5.0, 2.0, 2.4, 3), ("start", 5.0));
+    }
+
+    #[test]
+    fn an_entity_the_file_marks_invisible_is_not_drawn() {
+        let line = |invisible| {
+            let mut common = plain_common();
+            common.invisible = invisible;
+            Entity::Line(uncad_model::model::LineEntity {
+                common,
+                start_point: Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                end_point: Point3D {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 0.0,
+                },
+            })
+        };
+        assert!(render_one(line(false)).contains("<line"));
+        assert!(!render_one(line(true)).contains("<line"));
     }
 }

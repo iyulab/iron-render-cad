@@ -20,6 +20,7 @@ fn common(id: u64) -> EntityCommon {
         layer: Ref::Resolved("0".to_string()),
         color_index: 256,
         true_color: None,
+        invisible: false,
     }
 }
 

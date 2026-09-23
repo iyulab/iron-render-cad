@@ -10,12 +10,12 @@ Several entity types are drawn as approximations rather than faithfully. Every o
 them is still drawn (not reported as unsupported), because a recognizable picture is more
 useful than a gap -- but a reader should know which parts are approximate:
 
-- **Curves as chords**: ELLIPSE arcs and curved HATCH edges are drawn as polylines
-  through sampled points.
-- **SPLINE as its defining points**: a spline is drawn as straight segments through its
-  fit points when the drawing gives them, and otherwise through its control points --
-  its control polygon, which does not lie on the curve. The degree, knots and weights
-  that define the curve are in the model; this renderer does not evaluate them.
+- **Curves as chords**: curved HATCH edges are drawn as polylines through sampled
+  points. A SPLINE stored by control points is evaluated as the NURBS curve its degree,
+  knots and weights define, and drawn through 16 points per knot span; a SPLINE stored
+  by fit points only is drawn through its fit points. A spline whose knots or weights do
+  not add up to a definition is drawn as its control polygon, which does not lie on the
+  curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs.)
 - **3DSOLID / REGION / POLYLINE_PFACE as isometric wireframes**: the model carries a
   solid's edges only; the renderer projects them isometrically and draws the lines.
 - **VIEWPORT and WIPEOUT as outlines**: a viewport's frame, a wipeout's clip boundary;

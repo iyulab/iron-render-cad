@@ -1,0 +1,216 @@
+//! SPLINE curves as chords through points evaluated on the curve.
+//!
+//! A spline stored by control points is a NURBS curve: its degree, knot
+//! vector and weights define it, and the control points do not lie on it.
+//! It is evaluated here with de Boor's algorithm in homogeneous coordinates
+//! (so weights are exact, not approximated), sampled at a fixed number of
+//! points per non-empty knot span. A spline stored by fit points only has no
+//! knots to evaluate; it is drawn through the fit points, which lie on the
+//! curve.
+
+use uncad_model::model::{Point2D, SplineEntity};
+
+/// Points sampled per non-empty knot span. Fixed, so the same spline always
+/// yields the same points.
+const SAMPLES_PER_SPAN: usize = 16;
+
+/// The points a SPLINE is drawn through, in order.
+///
+/// Control points whose knots and weights do not form a valid definition
+/// (the knot count must be control points + degree + 1, and weights, when
+/// present, one per control point) fall back to the control polygon -- the
+/// only thing such data still says.
+pub(super) fn spline_points(s: &SplineEntity) -> Vec<Point2D> {
+    if let Some(points) = evaluate(s) {
+        return points;
+    }
+    let source = if s.fit_points.is_empty() {
+        &s.control_points
+    } else {
+        &s.fit_points
+    };
+    source.iter().map(|p| Point2D { x: p.x, y: p.y }).collect()
+}
+
+/// The curve sampled by de Boor's algorithm, or `None` when the spline does
+/// not carry a complete NURBS definition.
+fn evaluate(s: &SplineEntity) -> Option<Vec<Point2D>> {
+    let p = usize::try_from(s.degree).ok()?;
+    let n = s.control_points.len();
+    let knots = &s.knots;
+    if p == 0 || n <= p || knots.len() != n + p + 1 {
+        return None;
+    }
+    if !s.weights.is_empty() && s.weights.len() != n {
+        return None;
+    }
+    if knots.windows(2).any(|k| k[1] < k[0]) || knots.iter().any(|k| !k.is_finite()) {
+        return None;
+    }
+    // Homogeneous control points: (w x, w y, w).
+    let homogeneous: Vec<[f64; 3]> = s
+        .control_points
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let w = s.weights.get(i).copied().unwrap_or(1.0);
+            [c.x * w, c.y * w, w]
+        })
+        .collect();
+    // The curve is defined on [knots[p], knots[n]]; span k is [knots[k], knots[k + 1]].
+    let mut points = Vec::new();
+    for span in p..n {
+        let (a, b) = (knots[span], knots[span + 1]);
+        if b <= a {
+            continue;
+        }
+        let last = span + 1 == n || knots[span + 1..=n].iter().all(|&k| k == b);
+        let count = if last {
+            SAMPLES_PER_SPAN + 1
+        } else {
+            SAMPLES_PER_SPAN
+        };
+        for i in 0..count {
+            let u = a + (b - a) * (i as f64 / SAMPLES_PER_SPAN as f64);
+            let [x, y, w] = de_boor(span, u, p, knots, &homogeneous);
+            if w == 0.0 || !w.is_finite() {
+                return None;
+            }
+            points.push(Point2D { x: x / w, y: y / w });
+        }
+    }
+    (points.len() >= 2).then_some(points)
+}
+
+/// The curve point at `u` in knot span `k` (`knots[k] <= u <= knots[k + 1]`).
+fn de_boor(k: usize, u: f64, p: usize, knots: &[f64], control: &[[f64; 3]]) -> [f64; 3] {
+    let mut d: Vec<[f64; 3]> = (0..=p).map(|j| control[j + k - p]).collect();
+    for r in 1..=p {
+        for j in (r..=p).rev() {
+            let i = j + k - p;
+            let denom = knots[i + p + 1 - r] - knots[i];
+            let alpha = if denom == 0.0 {
+                0.0
+            } else {
+                (u - knots[i]) / denom
+            };
+            let prev = d[j - 1];
+            for (value, before) in d[j].iter_mut().zip(prev) {
+                *value = (1.0 - alpha) * before + alpha * *value;
+            }
+        }
+    }
+    d[p]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uncad_model::model::{Confidence, EntityCommon, EntityId, Origin, Point3D, Ref};
+
+    fn spline(degree: u32, control: &[(f64, f64)], knots: &[f64], weights: &[f64]) -> SplineEntity {
+        SplineEntity {
+            common: EntityCommon {
+                id: EntityId::new(1),
+                origin: Origin::Vector,
+                confidence: Confidence::High,
+                source_handle: Ref::Absent,
+                layer: Ref::Absent,
+                color_index: 7,
+                true_color: None,
+            },
+            degree,
+            closed: Some(false),
+            periodic: Some(false),
+            knots: knots.to_vec(),
+            weights: weights.to_vec(),
+            fit_points: Vec::new(),
+            control_points: control
+                .iter()
+                .map(|&(x, y)| Point3D { x, y, z: 0.0 })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_rational_quadratic_with_the_standard_weights_is_an_exact_quarter_circle() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let s = spline(
+            2,
+            &[(1.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
+            &[0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            &[1.0, h, 1.0],
+        );
+        let pts = spline_points(&s);
+        assert_eq!(pts.len(), SAMPLES_PER_SPAN + 1);
+        for p in &pts {
+            assert!(
+                (p.x.hypot(p.y) - 1.0).abs() < 1e-12,
+                "{p:?} is off the unit circle"
+            );
+        }
+        assert_eq!((pts[0].x, pts[0].y), (1.0, 0.0));
+        let end = pts.last().unwrap();
+        assert!((end.x - 0.0).abs() < 1e-15 && (end.y - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn a_clamped_cubic_passes_the_bezier_midpoint() {
+        let c = [(0.0, 0.0), (1.0, 2.0), (3.0, 2.0), (4.0, 0.0)];
+        let s = spline(3, &c, &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], &[]);
+        let pts = spline_points(&s);
+        // u = 0.5 is sample 8 of 16; the Bezier midpoint is (P0 + 3P1 + 3P2 + P3) / 8.
+        let mid = pts[SAMPLES_PER_SPAN / 2];
+        assert!(
+            (mid.x - 2.0).abs() < 1e-12 && (mid.y - 1.5).abs() < 1e-12,
+            "{mid:?}"
+        );
+        assert_eq!((pts[0].x, pts[0].y), (0.0, 0.0));
+        assert_eq!((pts.last().unwrap().x, pts.last().unwrap().y), (4.0, 0.0));
+    }
+
+    #[test]
+    fn a_degree_one_spline_is_its_control_polygon() {
+        let c = [(0.0, 0.0), (2.0, 0.0), (2.0, 2.0)];
+        let s = spline(1, &c, &[0.0, 0.0, 1.0, 2.0, 2.0], &[]);
+        let pts = spline_points(&s);
+        // Every point lies on one of the two legs; both corners are hit exactly.
+        for p in &pts {
+            let on_first = p.y.abs() < 1e-12 && (0.0..=2.0).contains(&p.x);
+            let on_second = (p.x - 2.0).abs() < 1e-12 && (0.0..=2.0).contains(&p.y);
+            assert!(on_first || on_second, "{p:?} is off the polygon");
+        }
+        assert!(pts.iter().any(|p| (p.x, p.y) == (2.0, 0.0)));
+        assert_eq!((pts.last().unwrap().x, pts.last().unwrap().y), (2.0, 2.0));
+    }
+
+    #[test]
+    fn a_definition_that_does_not_add_up_falls_back_to_the_control_polygon() {
+        let c = [(0.0, 0.0), (1.0, 1.0), (2.0, 0.0)];
+        // Three control points and degree 2 need six knots, not four.
+        let s = spline(2, &c, &[0.0, 0.0, 1.0, 1.0], &[]);
+        let pts = spline_points(&s);
+        let expected: Vec<(f64, f64)> = c.to_vec();
+        assert_eq!(pts.iter().map(|p| (p.x, p.y)).collect::<Vec<_>>(), expected);
+    }
+
+    #[test]
+    fn a_fit_point_spline_is_drawn_through_its_fit_points() {
+        let mut s = spline(3, &[], &[], &[]);
+        s.fit_points = vec![
+            Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            Point3D {
+                x: 1.0,
+                y: 1.0,
+                z: 0.0,
+            },
+        ];
+        let pts = spline_points(&s);
+        assert_eq!(pts.len(), 2);
+        assert_eq!((pts[1].x, pts[1].y), (1.0, 1.0));
+    }
+}

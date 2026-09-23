@@ -14,12 +14,13 @@
 //! Layout of this module: options and results, the block transform, the
 //! rendering context, per-entity rendering, then [`to_svg`] itself.
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
-//! string formatting), [`hatch`] (HATCH fills) and [`bounds`] (viewBox and
-//! outlier trim).
+//! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves)
+//! and [`bounds`] (viewBox and outlier trim).
 
 mod bounds;
 mod format;
 mod hatch;
+mod spline;
 
 use crate::color::{resolve_color, DEFAULT_COLOR};
 use bounds::{dominant_cluster_box, Box2D};
@@ -27,7 +28,7 @@ use format::{escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_fo
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
-    Entity, EntityCommon, EntityId, LightType, MLineVertex, Point2D, Point3D,
+    EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex, Point2D, Point3D,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
@@ -256,6 +257,35 @@ fn resolve_stroke_widths(body: &str, effective_stroke_width: f64) -> String {
         rest = &after[end + "@@".len()..];
     }
     out
+}
+
+/// How far an ELLIPSE runs, in its own parameter: `TAU` for a full ellipse,
+/// otherwise the counter-clockwise span from `start` to `end` in (0, TAU).
+/// DXF 41/42 are parameters of the ellipse, not polar angles, and the curve
+/// always runs counter-clockwise from the first to the second.
+fn ellipse_sweep(start: f64, end: f64) -> f64 {
+    let span = end - start;
+    if span.abs() < 1e-12 || (span.abs() - std::f64::consts::TAU).abs() < 1e-9 {
+        return std::f64::consts::TAU;
+    }
+    let sweep = span.rem_euclid(std::f64::consts::TAU);
+    if sweep < 1e-12 {
+        std::f64::consts::TAU
+    } else {
+        sweep
+    }
+}
+
+/// The point of an ELLIPSE at parameter `t`: `center + cos t * major + sin t
+/// * minor`, the minor axis being the major one turned a quarter turn
+/// counter-clockwise and scaled by `axis_ratio`.
+fn ellipse_point(el: &EllipseEntity, t: f64) -> Point2D {
+    let (mx, my) = (el.major_axis_endpoint.x, el.major_axis_endpoint.y);
+    let (nx, ny) = (-my * el.axis_ratio, mx * el.axis_ratio);
+    Point2D {
+        x: el.center.x + t.cos() * mx + t.sin() * nx,
+        y: el.center.y + t.cos() * my + t.sin() * ny,
+    }
 }
 
 /// A `<polyline>`, or a `<polygon>` when `closed` -- the shape every polyline
@@ -512,9 +542,26 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 .atan2(el.major_axis_endpoint.x)
                 .to_degrees();
             let (cx, cy) = (el.center.x, neg(el.center.y));
+            let sweep = ellipse_sweep(el.start_angle, el.end_angle);
+            if sweep >= std::f64::consts::TAU {
+                return Some(format!(
+                    "<ellipse cx=\"{cx}\" cy=\"{cy}\" rx=\"{rx}\" ry=\"{ry}\" transform=\"rotate({} {cx} {cy})\" fill=\"none\" stroke=\"{color}\"/>",
+                    neg(rot)
+                ));
+            }
+            // A partial ellipse: the same exact arc command ARC uses, with
+            // the axes and rotation of the ellipse. Counter-clockwise in the
+            // drawing is clockwise once y is flipped, hence sweep-flag 0.
+            let p1 = ellipse_point(el, el.start_angle);
+            let p2 = ellipse_point(el, el.start_angle + sweep);
+            let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
             Some(format!(
-                "<ellipse cx=\"{cx}\" cy=\"{cy}\" rx=\"{rx}\" ry=\"{ry}\" transform=\"rotate({} {cx} {cy})\" fill=\"none\" stroke=\"{color}\"/>",
-                neg(rot)
+                "<path d=\"M {} {} A {rx} {ry} {} {large} 0 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+                p1.x,
+                neg(p1.y),
+                neg(rot),
+                p2.x,
+                neg(p2.y)
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
@@ -730,19 +777,12 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             Some(dashed_outline(&w.boundary, &color, "2,2"))
         }
         Entity::Spline(s) => {
-            // Straight-line approximation through fit points (preferred, since
-            // they lie exactly on the curve) or control points -- not a real
-            // NURBS evaluation.
-            let pts = if !s.fit_points.is_empty() {
-                &s.fit_points
-            } else {
-                &s.control_points
-            };
+            let pts = spline::spline_points(s);
             if pts.len() < 2 {
                 return None;
             }
-            ctx.consider_all_3d(pts);
-            Some(polyline_element(&xy(pts), false, &color))
+            ctx.consider_all(&pts);
+            Some(polyline_element(&pts, false, &color))
         }
         Entity::Solid3D(s) => render_wireframe_entity(&s.wireframe_edges, "3DSOLID", &color, ctx),
         Entity::Region(r) => render_wireframe_entity(&r.wireframe_edges, "REGION", &color, ctx),
@@ -1277,5 +1317,70 @@ mod tests {
             !render_one(light(None)).contains("<line"),
             "a light of no stated kind is not given a direction"
         );
+    }
+
+    fn ellipse(start: f64, end: f64) -> Entity {
+        Entity::Ellipse(EllipseEntity {
+            common: plain_common(),
+            center: Point3D {
+                x: 1.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            // Major axis along +y, length 2; minor axis length 1, along -x.
+            major_axis_endpoint: Point3D {
+                x: 0.0,
+                y: 2.0,
+                z: 0.0,
+            },
+            axis_ratio: 0.5,
+            start_angle: start,
+            end_angle: end,
+        })
+    }
+
+    /// The numbers of the one `<path d="M x y A rx ry rot large sweep x y">`.
+    fn arc_numbers(svg: &str) -> Vec<f64> {
+        let d = svg
+            .split("d=\"")
+            .nth(1)
+            .expect("a path")
+            .split('"')
+            .next()
+            .unwrap();
+        d.split_whitespace()
+            .filter(|t| *t != "M" && *t != "A")
+            .map(|t| t.parse().unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_full_ellipse_is_drawn_whole() {
+        let svg = render_one(ellipse(0.0, std::f64::consts::TAU));
+        assert!(svg.contains("<ellipse") && !svg.contains("<path"));
+    }
+
+    #[test]
+    fn a_partial_ellipse_is_drawn_from_its_start_to_its_end_parameter() {
+        use std::f64::consts::FRAC_PI_2;
+        // Parameter 0 is the major-axis end (1, 3); a quarter turn on is the
+        // minor-axis end, the major axis turned counter-clockwise: (0, 1).
+        let n = arc_numbers(&render_one(ellipse(0.0, FRAC_PI_2)));
+        let [x1, y1, rx, ry, _rot, large, sweep, x2, y2] = n[..] else {
+            panic!("{n:?}")
+        };
+        assert_eq!((x1, -y1), (1.0, 3.0));
+        assert!(
+            (x2 - 0.0).abs() < 1e-12 && (-y2 - 1.0).abs() < 1e-12,
+            "({x2}, {y2})"
+        );
+        assert_eq!((rx, ry, large, sweep), (2.0, 1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn an_ellipse_arc_that_crosses_parameter_zero_takes_the_long_way() {
+        // From 1.0 counter-clockwise round to 0.5: a sweep of TAU - 0.5.
+        let n = arc_numbers(&render_one(ellipse(1.0, 0.5)));
+        assert_eq!(n[5], 1.0, "large-arc flag: {n:?}");
     }
 }

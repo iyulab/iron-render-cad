@@ -102,6 +102,26 @@ reference that never resolved, one that points at nothing, or a name with no def
 draws nothing and is reported in `ToSvgResult::unresolved_block_refs` by its ID; one whose
 block is there but draws nothing is reported in `empty_blocks` by the block's name.
 
+## Planar entities are drawn where their plane puts them
+
+CIRCLE, ARC, LWPOLYLINE and POLYLINE_2D, TEXT, ATTRIB, SOLID and TRACE state their
+coordinates in the object coordinate system their `extrusion` defines, and the model carries
+them as the file states them. The renderer takes them to the world by the DXF reference's
+arbitrary axis algorithm and draws them seen from above. A normal within 1e-9 (relatively) of
+the z axis is taken as the z axis; a normal of zero length is drawn as the z axis, the way the
+model places a block reference.
+
+- **Mirrored** (normal (0, 0, -1)): x changes sign and every curve stays exact -- an arc runs
+  clockwise, a polyline's bulges turn the other way, and a text reads backwards, as a text
+  seen from behind does.
+- **Tilted**: seen from above a circle is an ellipse, so a circle or an arc is drawn through
+  64 points of its outline and each arc of a polyline through 16; a text is foreshortened with
+  its plane; a SOLID's corners are exact.
+
+An INSERT is placed by the model's own `Affine2::from_insert`, which applies its extrusion the
+same way. A HATCH is drawn as its boundary is stated: the model carries no extrusion for it,
+so a mirrored HATCH lands on the other side of the y axis from the geometry around it.
+
 ## A far-away drawing is written about its own middle
 
 usvg and tiny-skia keep coordinates in `f32`, which at 2.5e8 -- a plan in millimetres at

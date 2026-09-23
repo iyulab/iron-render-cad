@@ -18,7 +18,8 @@
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
 //! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
 //! [`infinite`] (RAY and XLINE, cut to the picture once the viewBox is
-//! known), [`polyline`] (the arcs a polyline's bulges describe),
+//! known), [`ocs`] (planar entities' coordinates taken to the world),
+//! [`polyline`] (the arcs a polyline's bulges describe),
 //! [`justify`] (where a single-line text hangs and the box it fills) and
 //! [`bounds`] (viewBox and outlier trim).
 
@@ -27,6 +28,7 @@ mod format;
 mod hatch;
 mod infinite;
 mod justify;
+mod ocs;
 mod polyline;
 mod spline;
 
@@ -39,6 +41,7 @@ use crate::text::{decode_mtext, decode_text};
 use bounds::{bbox_of, dominant_cluster_box, Box2D};
 use format::{clean, escape_xml, neg, xy, Frame};
 use justify::{Anchor, MTextBlock, TextLayout};
+use ocs::Ocs;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -453,6 +456,26 @@ fn polyline_element(pts: &[Point2D], closed: bool, color: &str, frame: Frame) ->
         "<{tag} points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
         frame.points(pts)
     )
+}
+
+/// Points each arc of a polyline on a tilted plane is drawn through.
+const TILTED_ARC_POINTS: usize = 16;
+
+/// A polyline in its own (world) coordinates: a `<polyline>` or `<polygon>`
+/// when every segment is straight, as it always was, and a `<path>` with
+/// its arcs otherwise (see [`polyline`]).
+fn polyline_drawing(
+    vertices: &[Point2D],
+    bulges: &[f64],
+    closed: bool,
+    color: &str,
+    ctx: &mut Ctx,
+) -> String {
+    if bulges.iter().all(|b| *b == 0.0) {
+        ctx.consider_all(vertices);
+        return polyline_element(vertices, closed, color, ctx.frame);
+    }
+    polyline::bulged_element(vertices, bulges, closed, color, ctx)
 }
 
 /// A dashed outline, used for the shapes this renderer draws as an indication
@@ -963,10 +986,13 @@ fn numbers_are_real(e: &Entity) -> bool {
     }
     match e {
         Entity::Line(l) => p3(&l.start_point) && p3(&l.end_point),
-        Entity::Circle(c) => p3(&c.center) && real(&[c.radius]),
+        Entity::Circle(c) => {
+            p3(&c.center) && real(&[c.radius]) && ocs::numbers_are_real(&c.extrusion, c.center.z)
+        }
         Entity::Arc(a) => {
             p3(&a.center)
                 && real(&[a.radius])
+                && ocs::numbers_are_real(&a.extrusion, a.center.z)
                 && is_sane_angle(a.start_angle)
                 && is_sane_angle(a.end_angle)
         }
@@ -979,7 +1005,9 @@ fn numbers_are_real(e: &Entity) -> bool {
                 && is_sane_angle(el.end_angle)
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            p.vertices.iter().all(p2) && real(&p.bulges)
+            p.vertices.iter().all(p2)
+                && real(&p.bulges)
+                && ocs::numbers_are_real(&p.extrusion, p.elevation)
         }
         Entity::Polyline3D(p) => p.vertices.iter().all(p3),
         Entity::Text(t) => {
@@ -987,12 +1015,14 @@ fn numbers_are_real(e: &Entity) -> bool {
                 && t.alignment_point.as_ref().is_none_or(p2)
                 && real(&[t.text_height, t.rotation, t.width_factor])
                 && is_sane_angle(t.oblique_angle)
+                && ocs::numbers_are_real(&t.extrusion, t.elevation)
         }
         Entity::Attrib(a) => {
             p2(&a.start_point)
                 && a.alignment_point.as_ref().is_none_or(p2)
                 && real(&[a.text_height, a.rotation, a.width_factor])
                 && is_sane_angle(a.oblique_angle)
+                && ocs::numbers_are_real(&a.extrusion, a.elevation)
         }
         Entity::Tolerance(t) => {
             p3(&t.insertion_point) && t.text_height.is_none_or(|h| h.is_finite())
@@ -1010,10 +1040,15 @@ fn numbers_are_real(e: &Entity) -> bool {
         Entity::Point(p) => p3(&p.position),
         Entity::Solid(s) | Entity::Trace(s) => {
             [s.corner1, s.corner2, s.corner3, s.corner4].iter().all(p2)
+                && ocs::numbers_are_real(&s.extrusion, s.elevation)
         }
         Entity::Face3D(f) => [f.corner1, f.corner2, f.corner3, f.corner4].iter().all(p3),
         Entity::Ray(r) | Entity::XLine(r) => p3(&r.point) && p3(&r.vector),
-        Entity::Insert(i) => p3(&i.insertion_point) && real(&[i.scale.x, i.scale.y, i.rotation]),
+        Entity::Insert(i) => {
+            p3(&i.insertion_point)
+                && real(&[i.scale.x, i.scale.y, i.rotation])
+                && ocs::numbers_are_real(&i.extrusion, i.insertion_point.z)
+        }
         Entity::AcadTable(a) => p3(&a.insertion_point) && real(&[a.scale.x, a.scale.y, a.rotation]),
         Entity::Viewport(v) => p3(&v.center) && real(&[v.width, v.height]),
         Entity::Wipeout(w) => w.boundary.iter().all(p2),
@@ -1154,38 +1189,87 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::Circle(c) => {
+            let ocs = Ocs::new(c.extrusion, c.center.z);
+            let on_plane = Point2D {
+                x: c.center.x,
+                y: c.center.y,
+            };
+            if let Ocs::Tilted(_) = ocs {
+                // Seen from above, a circle on a tilted plane is an
+                // ellipse: drawn through points of its outline.
+                let points: Vec<Point2D> = (0..ELLIPSE_SAMPLES)
+                    .map(|i| {
+                        let t = std::f64::consts::TAU * (i as f64 / ELLIPSE_SAMPLES as f64);
+                        ocs.apply(Point2D {
+                            x: on_plane.x + c.radius * t.cos(),
+                            y: on_plane.y + c.radius * t.sin(),
+                        })
+                    })
+                    .collect();
+                ctx.consider_all(&points);
+                return Some(polyline_element(&points, true, &color, frame));
+            }
+            let center = ocs.apply(on_plane);
             ctx.consider_box(&Box2D {
-                min_x: c.center.x - c.radius,
-                max_x: c.center.x + c.radius,
-                min_y: c.center.y - c.radius,
-                max_y: c.center.y + c.radius,
+                min_x: center.x - c.radius,
+                max_x: center.x + c.radius,
+                min_y: center.y - c.radius,
+                max_y: center.y + c.radius,
             });
             Some(format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.x(c.center.x),
-                frame.y(c.center.y),
+                frame.x(center.x),
+                frame.y(center.y),
                 clean(c.radius)
             ))
         }
         Entity::Arc(a) => {
             let (x, y, r) = (a.center.x, a.center.y, a.radius);
-            let (x1, y1) = (x + r * a.start_angle.cos(), y + r * a.start_angle.sin());
-            let (x2, y2) = (x + r * a.end_angle.cos(), y + r * a.end_angle.sin());
+            let on_plane = |angle: f64| Point2D {
+                x: x + r * angle.cos(),
+                y: y + r * angle.sin(),
+            };
             let mut sweep = a.end_angle - a.start_angle;
             if sweep < 0.0 {
                 sweep += 2.0 * std::f64::consts::PI;
             }
+            let ocs = Ocs::new(a.extrusion, a.center.z);
+            if let Ocs::Tilted(_) = ocs {
+                // Seen from above, an arc on a tilted plane is part of an
+                // ellipse: drawn through points of it.
+                let points: Vec<Point2D> = (0..=ELLIPSE_SAMPLES)
+                    .map(|i| {
+                        ocs.apply(on_plane(
+                            a.start_angle + sweep * (i as f64 / ELLIPSE_SAMPLES as f64),
+                        ))
+                    })
+                    .collect();
+                ctx.consider_all(&points);
+                return Some(polyline_element(&points, false, &color, frame));
+            }
+            let center = ocs.apply(Point2D { x, y });
+            let (p1, p2) = (
+                ocs.apply(on_plane(a.start_angle)),
+                ocs.apply(on_plane(a.end_angle)),
+            );
+            // Counter-clockwise in its plane; a mirrored plane runs it
+            // clockwise in the world, where the same arc runs
+            // counter-clockwise from the mirror image of its end, `pi - end`.
+            let (world_start, sweep_flag) = match ocs {
+                Ocs::Mirrored => (std::f64::consts::PI - (a.start_angle + sweep), 1),
+                _ => (a.start_angle, 0),
+            };
             // The arc's own extent, not the whole circle's: a large-radius
             // fillet must not stretch the picture to its centre.
-            ctx.consider_box(&arc_extent(Point2D { x, y }, r, a.start_angle, sweep));
+            ctx.consider_box(&arc_extent(center, r, world_start, sweep));
             let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
             let r = clean(r);
             Some(format!(
-                "<path d=\"M {} {} A {r} {r} 0 {large} 0 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.x(x1),
-                frame.y(y1),
-                frame.x(x2),
-                frame.y(y2)
+                "<path d=\"M {} {} A {r} {r} 0 {large} {sweep_flag} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+                frame.x(p1.x),
+                frame.y(p1.y),
+                frame.x(p2.x),
+                frame.y(p2.y)
             ))
         }
         Entity::Ellipse(el) => {
@@ -1252,17 +1336,37 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            if p.bulges.iter().all(|b| *b == 0.0) {
-                ctx.consider_all(&p.vertices);
-                return Some(polyline_element(&p.vertices, p.closed, &color, frame));
+            match Ocs::new(p.extrusion, p.elevation) {
+                Ocs::World => Some(polyline_drawing(
+                    &p.vertices,
+                    &p.bulges,
+                    p.closed,
+                    &color,
+                    ctx,
+                )),
+                // A mirror keeps every arc an arc and turns it the other
+                // way: the vertices change side and every bulge its sign.
+                ocs @ Ocs::Mirrored => {
+                    let vertices: Vec<Point2D> = p.vertices.iter().map(|v| ocs.apply(*v)).collect();
+                    let bulges: Vec<f64> = p.bulges.iter().map(|b| -b).collect();
+                    Some(polyline_drawing(&vertices, &bulges, p.closed, &color, ctx))
+                }
+                // On a tilted plane an arc is part of an ellipse seen from
+                // above: drawn through points of it.
+                ocs @ Ocs::Tilted(_) => {
+                    let points: Vec<Point2D> = polyline::outline_points(
+                        &p.vertices,
+                        &p.bulges,
+                        p.closed,
+                        TILTED_ARC_POINTS,
+                    )
+                    .into_iter()
+                    .map(|v| ocs.apply(v))
+                    .collect();
+                    ctx.consider_all(&points);
+                    Some(polyline_element(&points, p.closed, &color, frame))
+                }
             }
-            Some(polyline::bulged_element(
-                &p.vertices,
-                &p.bulges,
-                p.closed,
-                &color,
-                ctx,
-            ))
         }
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {
@@ -1284,7 +1388,8 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 t.rotation,
                 t.oblique_angle,
                 t.width_factor,
-            );
+            )
+            .in_plane(&Ocs::new(t.extrusion, t.elevation));
             let text = decode_text(&t.text);
             justify::consider_text_box(&layout, &text, ctx);
             Some(justify::text_element(
@@ -1308,7 +1413,8 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 a.rotation,
                 a.oblique_angle,
                 a.width_factor,
-            );
+            )
+            .in_plane(&Ocs::new(a.extrusion, a.elevation));
             if a.text.is_empty() {
                 ctx.consider(layout.anchor.at.x, layout.anchor.at.y);
                 return Some(String::new());
@@ -1444,7 +1550,10 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Solid(s) | Entity::Trace(s) => {
             // Classic AutoCAD SOLID/TRACE vertex order is 1-2-4-3, not 1-2-3-4.
-            let pts = [s.corner1, s.corner2, s.corner4, s.corner3];
+            // A plane seen from above keeps a quadrilateral one, whatever
+            // its tilt: the corners are all it takes.
+            let ocs = Ocs::new(s.extrusion, s.elevation);
+            let pts = [s.corner1, s.corner2, s.corner4, s.corner3].map(|p| ocs.apply(p));
             ctx.consider_all(&pts);
             Some(format!(
                 "<polygon points=\"{}\" fill=\"{color}\" fill-opacity=\"0.6\" stroke=\"none\"/>",
@@ -1751,21 +1860,23 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
     let p3 = |p: &Point3D| Point2D { x: p.x, y: p.y };
     Some(match e {
         Entity::Line(l) => p3(&l.start_point),
-        Entity::Circle(c) => p3(&c.center),
-        Entity::Arc(a) => p3(&a.center),
+        Entity::Circle(c) => Ocs::new(c.extrusion, c.center.z).apply(p3(&c.center)),
+        Entity::Arc(a) => Ocs::new(a.extrusion, a.center.z).apply(p3(&a.center)),
         Entity::Ellipse(el) => p3(&el.center),
-        Entity::LwPolyline(p) | Entity::Polyline2D(p) => *p.vertices.first()?,
+        Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
+            Ocs::new(p.extrusion, p.elevation).apply(*p.vertices.first()?)
+        }
         Entity::Polyline3D(p) => p3(p.vertices.first()?),
-        Entity::Text(t) => t.start_point,
-        Entity::Attrib(a) => a.start_point,
-        Entity::Attdef(a) => a.start_point,
+        Entity::Text(t) => Ocs::new(t.extrusion, t.elevation).apply(t.start_point),
+        Entity::Attrib(a) => Ocs::new(a.extrusion, a.elevation).apply(a.start_point),
+        Entity::Attdef(a) => Ocs::new(a.extrusion, a.elevation).apply(a.start_point),
         Entity::Tolerance(t) => p3(&t.insertion_point),
         Entity::MText(m) => p3(&m.insertion_point),
         Entity::Point(p) => p3(&p.position),
-        Entity::Solid(s) | Entity::Trace(s) => s.corner1,
+        Entity::Solid(s) | Entity::Trace(s) => Ocs::new(s.extrusion, s.elevation).apply(s.corner1),
         Entity::Face3D(f) => p3(&f.corner1),
         Entity::Ray(r) | Entity::XLine(r) => p3(&r.point),
-        Entity::Insert(i) => p3(&i.insertion_point),
+        Entity::Insert(i) => Affine2::from_insert(i).apply(Point2D { x: 0.0, y: 0.0 }),
         Entity::AcadTable(a) => p3(&a.insertion_point),
         Entity::Dimension(d) => d.text_midpoint,
         Entity::Viewport(v) => p3(&v.center),

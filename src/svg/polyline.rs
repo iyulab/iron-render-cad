@@ -24,6 +24,17 @@ pub(super) struct BulgeArc {
     pub(super) sweep: f64,
 }
 
+impl BulgeArc {
+    /// The point `t` of the way along the arc, `t` in `0..=1`.
+    fn point_at(&self, t: f64) -> Point2D {
+        let angle = self.start_angle + self.sweep * t;
+        Point2D {
+            x: self.center.x + self.radius * angle.cos(),
+            y: self.center.y + self.radius * angle.sin(),
+        }
+    }
+}
+
 /// The arc from `from` to `to` with this bulge, or `None` for a straight
 /// segment: a bulge of 0, one that is not a number, or two coincident
 /// points (which no arc joins).
@@ -170,21 +181,45 @@ pub(super) fn bulged_element(
     format!("<path d=\"{d}\" fill=\"none\" stroke=\"{color}\"/>")
 }
 
+/// A polyline's outline as points: its vertices, with each arc segment
+/// drawn through `per_arc` points along it -- for a polyline whose plane is
+/// seen at a slant, where an arc is no longer circular (see `svg::ocs`). A
+/// closed polyline does not repeat its first point; the caller closes it.
+pub(super) fn outline_points(
+    vertices: &[Point2D],
+    bulges: &[f64],
+    closed: bool,
+    per_arc: usize,
+) -> Vec<Point2D> {
+    let Some(start) = without_closing_repeat(vertices, closed).first() else {
+        return Vec::new();
+    };
+    let mut points = vec![*start];
+    for segment in segments(vertices, bulges, closed) {
+        match segment {
+            Segment::Line { to } => points.push(to),
+            Segment::Arc { to, arc } => {
+                if drawable_radius(arc.radius) {
+                    for i in 1..per_arc {
+                        points.push(arc.point_at(i as f64 / per_arc as f64));
+                    }
+                }
+                points.push(to);
+            }
+        }
+    }
+    if closed && points.len() > 1 {
+        points.pop();
+    }
+    points
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn p(x: f64, y: f64) -> Point2D {
         Point2D { x, y }
-    }
-
-    /// The point `t` of the way along the arc.
-    fn at(arc: &BulgeArc, t: f64) -> Point2D {
-        let angle = arc.start_angle + arc.sweep * t;
-        p(
-            arc.center.x + arc.radius * angle.cos(),
-            arc.center.y + arc.radius * angle.sin(),
-        )
     }
 
     fn near(a: Point2D, b: Point2D) -> bool {
@@ -197,11 +232,11 @@ mod tests {
         let ccw = bulge_arc(p(0.0, 0.0), p(10.0, 0.0), 1.0).expect("an arc");
         assert!(near(ccw.center, p(5.0, 0.0)), "{ccw:?}");
         assert!((ccw.radius - 5.0).abs() < 1e-12);
-        assert!(near(at(&ccw, 0.5), p(5.0, -5.0)), "{ccw:?}");
-        assert!(near(at(&ccw, 1.0), p(10.0, 0.0)));
+        assert!(near(ccw.point_at(0.5), p(5.0, -5.0)), "{ccw:?}");
+        assert!(near(ccw.point_at(1.0), p(10.0, 0.0)));
         // Clockwise: the mirror image, through (5,5).
         let cw = bulge_arc(p(0.0, 0.0), p(10.0, 0.0), -1.0).expect("an arc");
-        assert!(near(at(&cw, 0.5), p(5.0, 5.0)), "{cw:?}");
+        assert!(near(cw.point_at(0.5), p(5.0, 5.0)), "{cw:?}");
     }
 
     #[test]
@@ -231,5 +266,15 @@ mod tests {
         );
         assert_eq!(segs.len(), 2);
         assert!(segs.iter().all(|s| matches!(s, Segment::Arc { .. })));
+    }
+
+    #[test]
+    fn outline_points_follow_each_arc_and_close_without_a_repeat() {
+        let pts = outline_points(&[p(0.0, 0.0), p(10.0, 0.0)], &[1.0, 1.0], true, 4);
+        // The start, three points along the first arc, its end, three
+        // along the closing arc -- whose end is the start, not repeated.
+        assert_eq!(pts.len(), 8, "{pts:?}");
+        assert!(near(pts[2], p(5.0, -5.0)), "{pts:?}");
+        assert!(near(pts[6], p(5.0, 5.0)), "{pts:?}");
     }
 }

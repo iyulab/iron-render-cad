@@ -12,6 +12,7 @@
 //! caller states.
 
 use super::format::{clean, escape_xml, neg, rotate_transform_attr, Frame};
+use super::ocs::Ocs;
 use super::Ctx;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -151,6 +152,32 @@ impl TextLayout {
             height,
             rotation: plain.then_some(rotation),
             axes: text_axes(rotation, oblique, width_factor),
+        }
+    }
+
+    /// This layout, stated in the plane `ocs` describes, as it lies in the
+    /// world seen from above: the anchor taken there, and the text's axes
+    /// with it -- so a mirrored text reads backwards, as a text seen from
+    /// behind does, and one on a tilted plane is foreshortened.
+    pub(super) fn in_plane(self, ocs: &Ocs) -> TextLayout {
+        if *ocs == Ocs::World {
+            return self;
+        }
+        let m = ocs.map();
+        let [a, b, c, d] = self.axes;
+        TextLayout {
+            anchor: Anchor {
+                at: ocs.apply(self.anchor.at),
+                ..self.anchor
+            },
+            height: self.height,
+            rotation: None,
+            axes: [
+                m.a * a + m.c * b,
+                m.b * a + m.d * b,
+                m.a * c + m.c * d,
+                m.b * c + m.d * d,
+            ],
         }
     }
 }

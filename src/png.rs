@@ -9,7 +9,7 @@
 //! step instead of risking a version mismatch across independently pinned
 //! crates.
 
-use crate::svg::{to_svg, ToSvgOptions};
+use crate::svg::{self, ToSvgOptions};
 use resvg::tiny_skia;
 use resvg::usvg::{self, fontdb};
 use std::sync::{Arc, OnceLock};
@@ -24,9 +24,15 @@ pub const DEFAULT_MAX_EDGE: u32 = 8192;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToPngOptions {
     pub svg: ToSvgOptions,
-    /// Multiplies the SVG's own viewBox-derived pixel size -- e.g. `2.0`
-    /// renders at 2x resolution. Must be finite and > 0.
-    pub scale: f32,
+    /// How many pixels the image is. Default [`PngSize::Scale`]`(1.0)`, one
+    /// pixel per drawing unit.
+    pub size: PngSize,
+    /// Every stroke's width in output pixels, turned into drawing units once
+    /// the pixel scale is known. `None` (the default) keeps
+    /// [`ToSvgOptions::stroke_width`]'s rule -- about 1/6000th of the
+    /// viewBox diagonal, which is below a pixel at most sizes. An explicit
+    /// `svg.stroke_width` takes precedence over this.
+    pub stroke_px: Option<f64>,
     /// Neither side of the image may be more pixels than this; a larger
     /// request fails with [`PngError::TooLarge`] before any pixel memory is
     /// allocated. The viewBox comes from the drawing's own coordinates, so
@@ -41,10 +47,48 @@ impl Default for ToPngOptions {
     fn default() -> Self {
         ToPngOptions {
             svg: ToSvgOptions::default(),
-            scale: 1.0,
+            size: PngSize::default(),
+            stroke_px: None,
             max_edge: DEFAULT_MAX_EDGE,
             fonts: Fonts::default(),
         }
+    }
+}
+
+/// How the image's pixel size follows from the drawing's viewBox.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum PngSize {
+    /// This many pixels per drawing unit: the viewBox's size times this --
+    /// e.g. `2.0` renders at twice one pixel a unit. Must be finite and
+    /// greater than 0.
+    Scale(f32),
+    /// The longer side of the image is this many pixels, the other follows
+    /// the viewBox's aspect ratio: an image of a known size whatever the
+    /// drawing's units.
+    FitLongEdge(u32),
+}
+
+impl Default for PngSize {
+    fn default() -> Self {
+        PngSize::Scale(1.0)
+    }
+}
+
+/// The stroke width, in drawing units, a PNG drawn at `px_per_unit` uses:
+/// an explicit SVG width first, then `stroke_px` turned into units, then the
+/// SVG's own rule (`auto`). A `stroke_px` that is not a positive number is
+/// ignored.
+fn stroke_width(
+    svg_stroke_width: Option<f64>,
+    stroke_px: Option<f64>,
+    px_per_unit: f64,
+    auto: f64,
+) -> f64 {
+    match (svg_stroke_width, stroke_px) {
+        (Some(units), _) => units,
+        (None, Some(px)) if px.is_finite() && px > 0.0 => px / px_per_unit,
+        _ => auto,
     }
 }
 
@@ -149,8 +193,8 @@ pub enum PngError {
     /// comes from this crate's own `to_svg`, this would indicate a bug
     /// there rather than bad input from a caller.
     InvalidSvg(usvg::Error),
-    /// The requested pixel size (viewBox size * `scale`) rounds to zero in
-    /// at least one dimension.
+    /// The requested pixel size rounds to zero in at least one dimension, or
+    /// the size asked for is not a positive number.
     EmptyCanvas,
     /// The requested pixel size exceeds the largest side allowed
     /// ([`ToPngOptions::max_edge`]). Nothing was allocated.
@@ -177,14 +221,14 @@ impl std::fmt::Display for PngError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PngError::InvalidSvg(e) => write!(f, "SVG parsing failed: {e}"),
-            PngError::EmptyCanvas => write!(f, "render size is zero (check the scale)"),
+            PngError::EmptyCanvas => write!(f, "render size is zero (check the size option)"),
             PngError::TooLarge {
                 width,
                 height,
                 max_edge,
             } => write!(
                 f,
-                "render size {width}x{height} px exceeds the {max_edge} px limit (use a smaller scale, or raise max_edge)"
+                "render size {width}x{height} px exceeds the {max_edge} px limit (ask for a smaller size, or raise max_edge)"
             ),
             PngError::Encode(e) => write!(f, "PNG encoding failed: {e}"),
             PngError::RenderPanic(e) => write!(f, "the rasterizer panicked: {e}"),
@@ -203,19 +247,33 @@ impl std::error::Error for PngError {}
 /// erroring -- usvg treats an unresolved glyph as empty, not a parse
 /// failure.
 pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, PngError> {
-    let svg_result = to_svg(db, options.svg);
+    let rendered = svg::render(db, options.svg);
+    let [_, _, width, height] = rendered.view_box;
+    let px_per_unit = match options.size {
+        PngSize::Scale(s) => f64::from(s),
+        PngSize::FitLongEdge(px) => f64::from(px) / width.max(height),
+    };
+    if !(px_per_unit.is_finite() && px_per_unit > 0.0) {
+        return Err(PngError::EmptyCanvas);
+    }
+    let stroke = stroke_width(
+        options.svg.stroke_width,
+        options.stroke_px,
+        px_per_unit,
+        rendered.auto_stroke_width,
+    );
     let png = rasterize(
-        &svg_result.svg,
-        options.scale,
+        &svg::assemble(&rendered, stroke),
+        px_per_unit as f32,
         options.max_edge,
         &options.fonts,
     )?;
     Ok(ToPngResult {
         png,
-        unsupported_types: svg_result.unsupported_types,
-        empty_blocks: svg_result.empty_blocks,
-        unresolved_block_refs: svg_result.unresolved_block_refs,
-        limits: svg_result.limits,
+        unsupported_types: rendered.unsupported_types,
+        empty_blocks: rendered.empty_blocks,
+        unresolved_block_refs: rendered.unresolved_block_refs,
+        limits: rendered.limits,
     })
 }
 
@@ -379,10 +437,54 @@ mod tests {
         assert!(matches!(err, PngError::TooLarge { .. }), "{err}");
         // A caller who asks for fewer pixels a unit gets the image.
         let small = ToPngOptions {
-            scale: 1.0e-4,
-            ..options
+            size: PngSize::Scale(1.0e-4),
+            ..options.clone()
         };
         assert!(to_png(&db, small).is_ok());
+        // So does one who asks for an image of a given size.
+        let fit = ToPngOptions {
+            size: PngSize::FitLongEdge(1000),
+            ..options
+        };
+        let png = to_png(&db, fit).expect("fits").png;
+        assert_eq!(png_dimensions(&png).0.max(png_dimensions(&png).1), 1000);
+    }
+
+    #[test]
+    fn fit_long_edge_sizes_the_longer_side_and_keeps_the_aspect_ratio() {
+        // G1's viewBox is wider than tall; its longer side becomes 1000 px
+        // and the shorter one follows.
+        let db: CadDatabase =
+            serde_json::from_str(include_str!("../tests/golden/g1.expected.json"))
+                .expect("the golden model deserializes");
+        let options = ToPngOptions {
+            size: PngSize::FitLongEdge(1000),
+            ..ToPngOptions::default()
+        };
+        let rendered = svg::render(&db, options.svg);
+        let [_, _, w, h] = rendered.view_box;
+        let (width, height) = png_dimensions(&to_png(&db, options).expect("renders").png);
+        assert_eq!(width.max(height), 1000);
+        let expected_short = (w.min(h) * 1000.0 / w.max(h)).round() as u32;
+        assert_eq!(width.min(height), expected_short);
+        // Asking for nothing is an empty canvas, not a panic.
+        let none = ToPngOptions {
+            size: PngSize::FitLongEdge(0),
+            ..ToPngOptions::default()
+        };
+        assert!(matches!(to_png(&db, none), Err(PngError::EmptyCanvas)));
+    }
+
+    #[test]
+    fn a_stroke_in_pixels_is_turned_into_drawing_units_at_the_pixel_scale() {
+        // 1.5 px at 4 px a unit is 0.375 units.
+        assert_eq!(stroke_width(None, Some(1.5), 4.0, 0.01), 0.375);
+        // An explicit SVG stroke width wins.
+        assert_eq!(stroke_width(Some(0.2), Some(1.5), 4.0, 0.01), 0.2);
+        // Neither: the SVG's own rule; nor is a nonsense pixel width used.
+        assert_eq!(stroke_width(None, None, 4.0, 0.01), 0.01);
+        assert_eq!(stroke_width(None, Some(-1.0), 4.0, 0.01), 0.01);
+        assert_eq!(stroke_width(None, Some(f64::NAN), 4.0, 0.01), 0.01);
     }
 
     #[test]

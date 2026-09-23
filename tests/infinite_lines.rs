@@ -214,7 +214,7 @@ fn a_construction_line_in_a_tiny_drawing_rasterizes() {
                 padding: 0.0,
                 ..ToSvgOptions::default()
             },
-            scale: 784_000.0,
+            size: iron_render_cad::PngSize::Scale(784_000.0),
             ..ToPngOptions::default()
         },
     )

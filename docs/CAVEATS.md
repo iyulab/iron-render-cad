@@ -188,12 +188,18 @@ references and a 139 MB SVG before anything stopped it.
 
 ## PNG size is bounded
 
-A PNG's pixel size is the viewBox's size in drawing units times `scale`, and the viewBox
-comes from the drawing's own coordinates. Neither side may exceed `ToPngOptions::max_edge`
+A PNG's pixel size is the viewBox's size in drawing units times a scale: the one asked for
+(`PngSize::Scale`, one pixel a unit by default), or the one that makes the longer side a
+given number of pixels (`PngSize::FitLongEdge`). The viewBox comes from the drawing's own
+coordinates, so at a fixed scale the file decides the size. Neither side may exceed
+`ToPngOptions::max_edge`
 (default 8192 px; `svg_to_png` always applies the default): a larger request fails with
 `PngError::TooLarge` before any pixel memory is allocated, because the pixmap's allocation
 cannot fail gracefully -- a request the allocator refuses aborts the process. One corrupt
 LibreDWG corpus file (`example_2000.dwg`) asked for 36 TB this way.
+
+Strokes are about 1/6000th of the viewBox diagonal wide by default, which is below a pixel at
+most sizes; `ToPngOptions::stroke_px` sets them in output pixels instead.
 
 The rasterizer itself can panic: tiny-skia asserts instead of returning an error when a
 path's coordinates overflow its fixed-point scan converter. The panic is caught and returned

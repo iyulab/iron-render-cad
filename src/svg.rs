@@ -1753,16 +1753,35 @@ fn choose_origin(selected: &[&Entity]) -> Point2D {
 
 // --- top level ---------------------------------------------------------
 
-/// Renders a parsed [`CadDatabase`] to an SVG string.
+/// Everything a render computes before the stroke width is known: the
+/// drawn elements with their placeholders still in place, the `<defs>`
+/// HATCH needs, the viewBox and what was reported. [`assemble`] turns it
+/// into a document; `png.rs` uses the split to choose a stroke width in
+/// pixels once it knows how many pixels a unit is.
+pub(crate) struct Rendered {
+    /// One element string per drawn top-level entity, in drawing order.
+    body: Vec<String>,
+    defs: Vec<String>,
+    /// The viewBox as the document writes it -- `x, y, width, height`, in
+    /// the render's frame (see [`ToSvgResult::origin`]), padding included.
+    pub(crate) view_box: [f64; 4],
+    /// The stroke width [`to_svg`] uses when none is given: ~1/6000th of the
+    /// padded extent's diagonal, floored at 0.01.
+    pub(crate) auto_stroke_width: f64,
+    pub(crate) unsupported_types: Vec<String>,
+    pub(crate) empty_blocks: Vec<String>,
+    pub(crate) unresolved_block_refs: Vec<EntityId>,
+    pub(crate) limits: LimitReport,
+    pub(crate) origin: Point2D,
+}
+
+/// Renders every entity of `options.space`, measures the extent and settles
+/// the viewBox, leaving the stroke width unresolved.
 ///
 /// `outlier_trim` (default `true`) computes the viewBox from the dominant
 /// spatially-connected cluster of entities instead of the raw min/max -- see
 /// [`bounds`] for why.
-///
-/// `stroke_width` defaults to ~1/6000th of the computed viewBox diagonal
-/// rather than a fixed value; see [`stroke_width_placeholder`] for how nested
-/// block references keep a constant visual weight.
-pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
+pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Rendered {
     let mut entity_boxes: Vec<Box2D> = Vec::new();
     let mut body: Vec<String> = Vec::new();
 
@@ -1829,38 +1848,66 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
     let y = -bounds.max_y - options.padding + origin.y;
     let width = (bounds.max_x - bounds.min_x) + options.padding * 2.0;
     let height = (bounds.max_y - bounds.min_y) + options.padding * 2.0;
-    let effective_stroke_width = options
-        .stroke_width
-        .unwrap_or_else(|| (width.hypot(height) / 6000.0).max(0.01));
+    let auto_stroke_width = (width.hypot(height) / 6000.0).max(0.01);
     // A degenerate (zero-size) extent still gets a 1 x 1 canvas.
     let width = if width != 0.0 { width } else { 1.0 };
     let height = if height != 0.0 { height } else { 1.0 };
 
-    // Construction lines are cut to the picture now that it is known.
-    let resolved_body = infinite::resolve(
-        resolve_stroke_widths(&body.join("\n  "), effective_stroke_width),
-        infinite::window(x, y, width, height, effective_stroke_width),
-    );
-    // HATCH pattern defs carry stroke-width placeholders too. Kept separate
-    // from the body only so an empty defs list emits no <defs> block at all.
-    let defs_block = if ctx.defs.is_empty() {
-        String::new()
-    } else {
-        let resolved_defs = resolve_stroke_widths(&ctx.defs.join("\n  "), effective_stroke_width);
-        format!("<defs>\n  {resolved_defs}\n</defs>\n  ")
-    };
-
-    let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{effective_stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>"
-    );
-
-    ToSvgResult {
-        svg,
+    Rendered {
+        body,
+        defs: ctx.defs,
+        view_box: [x, y, width, height],
+        auto_stroke_width,
         unsupported_types: ctx.unsupported.into_iter().collect(),
         empty_blocks: ctx.empty_blocks.into_iter().collect(),
         unresolved_block_refs: ctx.unresolved_block_refs.into_iter().collect(),
         limits: ctx.limits,
         origin,
+    }
+}
+
+/// The SVG document of `rendered` with every stroke `stroke_width` drawing
+/// units wide (see [`stroke_width_placeholder`] for how nested block
+/// references keep that visual weight), and every construction line cut to
+/// the viewBox.
+pub(crate) fn assemble(rendered: &Rendered, stroke_width: f64) -> String {
+    let [x, y, width, height] = rendered.view_box;
+    let resolved_body = infinite::resolve(
+        resolve_stroke_widths(&rendered.body.join("\n  "), stroke_width),
+        infinite::window(x, y, width, height, stroke_width),
+    );
+    // HATCH pattern defs carry stroke-width placeholders too. Kept separate
+    // from the body only so an empty defs list emits no <defs> block at all.
+    let defs_block = if rendered.defs.is_empty() {
+        String::new()
+    } else {
+        let resolved_defs = resolve_stroke_widths(&rendered.defs.join("\n  "), stroke_width);
+        format!("<defs>\n  {resolved_defs}\n</defs>\n  ")
+    };
+    format!(
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>"
+    )
+}
+
+/// Renders a parsed [`CadDatabase`] to an SVG string.
+///
+/// `outlier_trim` (default `true`) computes the viewBox from the dominant
+/// spatially-connected cluster of entities instead of the raw min/max -- see
+/// [`bounds`] for why.
+///
+/// `stroke_width` defaults to ~1/6000th of the computed viewBox diagonal
+/// rather than a fixed value; see [`stroke_width_placeholder`] for how nested
+/// block references keep a constant visual weight.
+pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
+    let rendered = render(db, options);
+    let stroke_width = options.stroke_width.unwrap_or(rendered.auto_stroke_width);
+    ToSvgResult {
+        svg: assemble(&rendered, stroke_width),
+        unsupported_types: rendered.unsupported_types,
+        empty_blocks: rendered.empty_blocks,
+        unresolved_block_refs: rendered.unresolved_block_refs,
+        limits: rendered.limits,
+        origin: rendered.origin,
     }
 }
 

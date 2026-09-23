@@ -34,6 +34,22 @@ let png = iron_render_cad::to_png(&db, iron_render_cad::ToPngOptions::default())
 std::fs::write("drawing.png", png.png)?;
 ```
 
+Render once, draw many pictures of it -- here one tile, and where each text landed:
+
+```rust
+use iron_render_cad::{Background, Crop, Fonts, Rect, Scene, ToSvgOptions, View};
+
+let scene = Scene::new(&db, ToSvgOptions { crop: Crop::Guarded { stated: None }, ..ToSvgOptions::default() });
+let tile = Rect::new(0.0, 0.0, 100.0, 100.0);
+let view = View::of(tile, 10.0).expect("a positive scale"); // 1000 x 1000 px
+let png = scene.png(&view, 1.25, &Fonts::System, Background::White, |part| {
+    part.unbounded || part.extent.is_some_and(|e| e.intersects(&tile))
+})?;
+for text in scene.text_boxes(&Fonts::System)? {
+    println!("{:?} {:?} {:?}", text.path, text.text, text.measured);
+}
+```
+
 ## License
 
 MIT

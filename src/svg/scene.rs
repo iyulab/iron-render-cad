@@ -153,8 +153,9 @@ pub struct TextBox {
     pub estimate: Option<Rect>,
     /// The box of its glyph outlines as the fonts lay them out, in world
     /// units, through every enclosing placement (a turned text's box is the
-    /// box of its turned outline box). `None` when nothing was laid out:
-    /// no face had any of its glyphs, or it shows only spaces.
+    /// box of its turned outline box). The layout is computed in single
+    /// precision, relative to the scene's origin. `None` when nothing was
+    /// laid out: no face had any of its glyphs, or it shows only spaces.
     pub measured: Option<Rect>,
     /// How many of its glyphs the fonts did not have and drew as the
     /// face's missing-glyph shape.

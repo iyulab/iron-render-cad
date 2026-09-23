@@ -12,7 +12,9 @@
 //! deserialized from its JSON: a real drawing's worth of entities, and no
 //! parser in the loop.
 
-use iron_render_cad::{to_png, to_svg, Space, ToPngOptions, ToSvgOptions};
+use iron_render_cad::{
+    to_png, to_svg, Background, Crop, Fonts, Rect, Scene, Space, ToPngOptions, ToSvgOptions, View,
+};
 use uncad_model::CadDatabase;
 
 /// How often each output is regenerated. With four or more entries in a
@@ -57,6 +59,34 @@ fn repeated_png_renders_are_byte_identical() {
     for run in 1..8 {
         let again = to_png(&db, ToPngOptions::default()).expect("G1 renders to PNG");
         assert_eq!(first.png, again.png, "run {run}: PNG bytes changed");
+    }
+}
+
+#[test]
+fn repeated_scenes_give_the_same_parts_windows_tiles_and_texts() {
+    let db = g1();
+    let options = ToSvgOptions {
+        crop: Crop::Guarded { stated: None },
+        ..ToSvgOptions::default()
+    };
+    let window = Rect::new(0.0, 0.0, 60.0, 40.0);
+    let view = View::of(window, 8.0).expect("a view");
+    let render = || {
+        let scene = Scene::new(&db, options);
+        let keep = |p: &iron_render_cad::Part| p.extent.is_some_and(|e| e.intersects(&window));
+        (
+            scene.parts().to_vec(),
+            scene.crop.clone(),
+            scene.svg(window, 0.2, keep),
+            scene
+                .png(&view, 1.25, &Fonts::System, Background::White, keep)
+                .expect("a tile"),
+            scene.text_boxes(&Fonts::System).expect("laid out"),
+        )
+    };
+    let first = render();
+    for run in 1..8 {
+        assert!(render() == first, "run {run}: a scene's output changed");
     }
 }
 

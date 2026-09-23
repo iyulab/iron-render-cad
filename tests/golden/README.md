@@ -10,6 +10,7 @@ checks in `tests/` run against a real drawing's worth of entities.
 | `g1` | A plate: outline, holes, dimensions through their blocks, a title block with attributes | `determinism.rs` |
 | `g2` | One line inside block references nested three deep, rotated and scaled at each level | `nested_blocks.rs` |
 | `g12` | Polylines that are not just their vertices: a slot, a tapered arrow, a rounded corner, a DONUT | `polylines.rs` |
+| `g13` | Text in every justification, stretched and slanted, and a block's attributes, one invisible | `justified_text.rs` |
 
 The files are generated, not hand-written. To regenerate after a change to the writer or a
 spec, from a checkout of `uncad-model`:

@@ -48,6 +48,19 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **Invisible entities are not drawn**: an entity the drawing marks invisible (a dynamic
   block's hidden visibility states) is left out, and does not count towards the extent. A
   block reference whose block holds only such entities is reported in `empty_blocks`.
+- **TEXT and ATTRIB are placed by their justification**: a left/baseline text by its start
+  point, every other one by its alignment point -- anchored at the start, the middle or the
+  end of its baseline, and hung from its baseline, its middle, the top of its capitals or the
+  bottom of its descenders. A bottom-justified text assumes descenders of 0.2 em, a Latin `p`
+  in the common sans-serif faces. ALIGNED and FIT, which fill the baseline between their two
+  points by a stretch only the font's metrics give, are centred between the points at their
+  stated height and width factor instead. The width factor stretches the characters and the
+  oblique angle slants them (through a `matrix()` on the `<text>`).
+- **A text's extent is an estimated box**: a TEXT or ATTRIB counts its anchor point and the
+  box its characters are estimated to fill -- 0.6 em per character, the height of its capitals
+  -- placed, turned, stretched and slanted the way it is drawn. The glyphs themselves are laid
+  out by the face the rasterizer picks, so a wide face runs past the box and a narrow one
+  stops short of it.
 - **MTEXT is placed by its attachment point**, one line per paragraph, with the lines 5/3
   of the text height apart times the spacing factor (AutoCAD's single spacing) -- real line
   breaks and glyph metrics depend on the font. Where the drawing does not state the

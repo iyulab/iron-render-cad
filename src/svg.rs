@@ -18,13 +18,15 @@
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
 //! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
 //! [`infinite`] (RAY and XLINE, cut to the picture once the viewBox is
-//! known), [`polyline`] (the arcs a polyline's bulges describe) and
+//! known), [`polyline`] (the arcs a polyline's bulges describe),
+//! [`justify`] (where a single-line text hangs and the box it fills) and
 //! [`bounds`] (viewBox and outlier trim).
 
 mod bounds;
 mod format;
 mod hatch;
 mod infinite;
+mod justify;
 mod polyline;
 mod spline;
 
@@ -35,7 +37,8 @@ use crate::limits::{
 };
 use crate::text::{decode_mtext, decode_text};
 use bounds::{bbox_of, dominant_cluster_box, Box2D};
-use format::{clean, escape_xml, neg, rotate_transform_attr, xy, Frame};
+use format::{clean, escape_xml, neg, xy, Frame};
+use justify::{Anchor, TextLayout};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -340,6 +343,12 @@ impl<'a> Ctx<'a> {
         }
     }
 
+    /// How far a text's descenders reach below its baseline, in text
+    /// heights: [`justify::DESCENDER_EM`] in the em the text is drawn at.
+    fn descender(&self) -> f64 {
+        justify::DESCENDER_EM / self.cap_height
+    }
+
     /// A document-unique id for a `<defs>` entry, e.g. `"hp3"`.
     fn next_def_id(&mut self, prefix: &str) -> String {
         let id = format!("{prefix}{}", self.next_def_id);
@@ -464,29 +473,6 @@ fn effective_text_height(stored: f64) -> f64 {
     } else {
         1.0
     }
-}
-
-/// A single-line `<text>` at `at` -- TEXT, ATTRIB and TOLERANCE all render
-/// to this. `text` is what is shown, already decoded; `height` is the CAD
-/// height, the height of the capitals, written as the `font-size` that
-/// makes the capitals that tall in a face whose capitals are `cap_height`
-/// of the em.
-fn text_element(
-    at: Point2D,
-    height: f64,
-    rotation: f64,
-    color: &str,
-    text: &str,
-    frame: Frame,
-    cap_height: f64,
-) -> String {
-    let font_size = effective_text_height(height) / cap_height;
-    let (x, y) = (frame.x(at.x), frame.y(at.y));
-    format!(
-        "<text x=\"{x}\" y=\"{y}\" font-size=\"{font_size}\" fill=\"{color}\" stroke=\"none\"{}>{}</text>",
-        rotate_transform_attr(rotation, x, y),
-        escape_xml(text)
-    )
 }
 
 /// Where an MTEXT block goes relative to its insertion point: the SVG
@@ -996,8 +982,18 @@ fn numbers_are_real(e: &Entity) -> bool {
             p.vertices.iter().all(p2) && real(&p.bulges)
         }
         Entity::Polyline3D(p) => p.vertices.iter().all(p3),
-        Entity::Text(t) => p2(&t.start_point) && real(&[t.text_height, t.rotation]),
-        Entity::Attrib(a) => p2(&a.start_point) && real(&[a.text_height, a.rotation]),
+        Entity::Text(t) => {
+            p2(&t.start_point)
+                && t.alignment_point.as_ref().is_none_or(p2)
+                && real(&[t.text_height, t.rotation, t.width_factor])
+                && is_sane_angle(t.oblique_angle)
+        }
+        Entity::Attrib(a) => {
+            p2(&a.start_point)
+                && a.alignment_point.as_ref().is_none_or(p2)
+                && real(&[a.text_height, a.rotation, a.width_factor])
+                && is_sane_angle(a.oblique_angle)
+        }
         Entity::Tolerance(t) => {
             p3(&t.insertion_point) && t.text_height.is_none_or(|h| h.is_finite())
         }
@@ -1269,28 +1265,53 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             Some(polyline_element(&xy(&p.vertices), p.closed, &color, frame))
         }
         Entity::Text(t) => {
-            ctx.consider(t.start_point.x, t.start_point.y);
-            Some(text_element(
-                t.start_point,
-                t.text_height,
+            let layout = TextLayout::new(
+                justify::anchor(
+                    t.start_point,
+                    t.alignment_point,
+                    t.horizontal_justification,
+                    t.vertical_justification,
+                    ctx.descender(),
+                ),
+                effective_text_height(t.text_height),
                 t.rotation,
+                t.oblique_angle,
+                t.width_factor,
+            );
+            let text = decode_text(&t.text);
+            justify::consider_text_box(&layout, &text, ctx);
+            Some(justify::text_element(
+                &layout,
                 &color,
-                &decode_text(&t.text),
+                &text,
                 frame,
                 ctx.cap_height,
             ))
         }
         Entity::Attrib(a) => {
-            ctx.consider(a.start_point.x, a.start_point.y);
+            let layout = TextLayout::new(
+                justify::anchor(
+                    a.start_point,
+                    a.alignment_point,
+                    a.horizontal_justification,
+                    a.vertical_justification,
+                    ctx.descender(),
+                ),
+                effective_text_height(a.text_height),
+                a.rotation,
+                a.oblique_angle,
+                a.width_factor,
+            );
             if a.text.is_empty() {
+                ctx.consider(layout.anchor.at.x, layout.anchor.at.y);
                 return Some(String::new());
             }
-            Some(text_element(
-                a.start_point,
-                a.text_height,
-                a.rotation,
+            let text = decode_text(&a.text);
+            justify::consider_text_box(&layout, &text, ctx);
+            Some(justify::text_element(
+                &layout,
                 &color,
-                &decode_text(&a.text),
+                &text,
                 frame,
                 ctx.cap_height,
             ))
@@ -1316,13 +1337,22 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                         .and_then(positive)
                 })
                 .unwrap_or(1.0);
-            Some(text_element(
-                Point2D {
-                    x: t.insertion_point.x,
-                    y: t.insertion_point.y,
+            let layout = TextLayout::new(
+                Anchor {
+                    at: Point2D {
+                        x: t.insertion_point.x,
+                        y: t.insertion_point.y,
+                    },
+                    anchor: "start",
+                    drop: 0.0,
                 },
                 height,
                 0.0,
+                0.0,
+                1.0,
+            );
+            Some(justify::text_element(
+                &layout,
                 &color,
                 &t.text_value,
                 frame,

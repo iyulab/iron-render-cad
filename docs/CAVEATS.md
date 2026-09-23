@@ -38,6 +38,10 @@ useful than a gap -- but a reader should know which parts are approximate:
   real line breaks and glyph metrics depend on the font. Where the drawing does not state
   the attachment, the insertion point is used as the first line's baseline.
 
+- **RAY and XLINE end at the edge of the picture**: a construction line has no end, so only
+  its base point counts towards the extent, and the line is drawn dashed from edge to edge
+  of the viewBox (grown by a percent of its diagonal) -- or not at all where it misses it.
+
 What the renderer cannot draw at all (a type the model has no shape for arrives as
 `Entity::Unknown`) is reported in `ToSvgResult::unsupported_types`, sorted by name. The
 one type that will stay there for good is `ACAD_PROXY_ENTITY`: an opaque per-application

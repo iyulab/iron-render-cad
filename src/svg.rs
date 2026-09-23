@@ -14,12 +14,14 @@
 //! Layout of this module: options and results, the block transform, the
 //! rendering context, per-entity rendering, then [`to_svg`] itself.
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
-//! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves)
-//! and [`bounds`] (viewBox and outlier trim).
+//! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
+//! [`infinite`] (RAY and XLINE, cut to the picture once the viewBox is
+//! known) and [`bounds`] (viewBox and outlier trim).
 
 mod bounds;
 mod format;
 mod hatch;
+mod infinite;
 mod spline;
 
 use crate::color::{resolve_color, DEFAULT_COLOR};
@@ -163,6 +165,11 @@ struct Ctx<'a> {
     /// its placement sends there (see [`render_block_ref`]). `transform`
     /// and the bounds stay in world units.
     frame: Frame,
+    /// The enclosing `<g transform>` matrices composed: what takes a
+    /// coordinate written now to the document's own. Identity at the top
+    /// level. Only an element that cannot be finished until the viewBox is
+    /// known needs it -- see [`infinite`].
+    svg_matrix: infinite::Matrix,
     /// `<defs>` entries accumulated by HATCH rendering, emitted once into a
     /// top-level `<defs>` by [`to_svg`]. Persists across `render_block_ref`'s
     /// transform save/restore, since a HATCH can appear inside a block too.
@@ -203,6 +210,7 @@ impl<'a> Ctx<'a> {
             inherited_color: DEFAULT_COLOR.to_string(),
             transform: Affine2::IDENTITY,
             frame: Frame::default(),
+            svg_matrix: infinite::IDENTITY,
             defs: Vec::new(),
             next_def_id: 0,
             block_ref_budget: MAX_BLOCK_REFS,
@@ -602,6 +610,12 @@ fn render_block_ref(
         }
     };
     ctx.frame = child_frame;
+    // The group this call emits, needed before the children are drawn: an
+    // infinite line among them is cut in the document's frame and has to
+    // know what gets it there.
+    let group_matrix = svg_matrix(&child_transform, parent_frame, child_frame);
+    let parent_svg_matrix = ctx.svg_matrix;
+    ctx.svg_matrix = infinite::compose(parent_svg_matrix, group_matrix);
     ctx.transform = child_transform.then(&parent_transform);
     // How much this block's contents are scaled, for stroke widths: the
     // area scale of the composed placement. Derived from the placement
@@ -630,6 +644,7 @@ fn render_block_ref(
 
     ctx.transform = parent_transform;
     ctx.frame = parent_frame;
+    ctx.svg_matrix = parent_svg_matrix;
     ctx.depth = parent_depth;
     ctx.scale = parent_scale;
     ctx.inherited_color = parent_inherited;
@@ -642,7 +657,7 @@ fn render_block_ref(
     // The parent transform is baked into ctx.transform for *bounds* purposes
     // (world-space consider()), but the emitted matrix is only this block's own
     // local transform -- nesting is expressed by nested <g> elements.
-    let [a, b, c, d, e, f] = svg_matrix(&child_transform, parent_frame, child_frame);
+    let [a, b, c, d, e, f] = group_matrix;
     format!(
         "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\" stroke-width=\"{}\">\n  {}\n</g>",
         stroke_width_placeholder(cumulative_scale),
@@ -1067,22 +1082,29 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::Ray(r) | Entity::XLine(r) => {
-            let is_xline = matches!(e, Entity::XLine(_));
+            // A construction line has no end, so only its base point counts
+            // towards the extent: a viewBox that had to contain the line
+            // would show nothing else. Where the line stops is the edge of
+            // the picture, known only once every entity has been walked, so
+            // the element is a placeholder cut to the viewBox at the end
+            // (see [`infinite`]).
             ctx.consider(r.point.x, r.point.y);
-            let len = 1e6;
-            let (dx, dy) = (r.vector.x * len, r.vector.y * len);
-            let (x1, y1) = if is_xline {
-                (r.point.x - dx, r.point.y - dy)
-            } else {
-                (r.point.x, r.point.y)
-            };
-            let (x2, y2) = (r.point.x + dx, r.point.y + dy);
-            Some(format!(
-                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke-dasharray=\"4,2\" stroke=\"{color}\"/>",
-                frame.x(x1),
-                frame.y(y1),
-                frame.x(x2),
-                frame.y(y2)
+            // The direction in the element's own frame: y flipped, like
+            // every coordinate written here.
+            let (dx, dy) = (r.vector.x, -r.vector.y);
+            let len = dx.hypot(dy);
+            if !(len.is_finite() && len > 0.0) {
+                // No direction in plan: nothing to draw.
+                return None;
+            }
+            Some(infinite::placeholder(
+                &infinite::InfiniteLine {
+                    matrix: ctx.svg_matrix,
+                    base: (frame.x(r.point.x), frame.y(r.point.y)),
+                    dir: (dx / len, dy / len),
+                    both_ways: matches!(e, Entity::XLine(_)),
+                },
+                &color,
             ))
         }
         Entity::Insert(i) => Some(render_block_ref(
@@ -1494,8 +1516,15 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
     let effective_stroke_width = options
         .stroke_width
         .unwrap_or_else(|| (width.hypot(height) / 6000.0).max(0.01));
+    // A degenerate (zero-size) extent still gets a 1 x 1 canvas.
+    let width = if width != 0.0 { width } else { 1.0 };
+    let height = if height != 0.0 { height } else { 1.0 };
 
-    let resolved_body = resolve_stroke_widths(&body.join("\n  "), effective_stroke_width);
+    // Construction lines are cut to the picture now that it is known.
+    let resolved_body = infinite::resolve(
+        resolve_stroke_widths(&body.join("\n  "), effective_stroke_width),
+        infinite::window(x, y, width, height, effective_stroke_width),
+    );
     // HATCH pattern defs carry stroke-width placeholders too. Kept separate
     // from the body only so an empty defs list emits no <defs> block at all.
     let defs_block = if ctx.defs.is_empty() {
@@ -1506,9 +1535,7 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
     };
 
     let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {} {}\" stroke=\"black\" stroke-width=\"{effective_stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>",
-        if width != 0.0 { width } else { 1.0 },
-        if height != 0.0 { height } else { 1.0 }
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{effective_stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>"
     );
 
     ToSvgResult {

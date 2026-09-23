@@ -15,7 +15,9 @@ useful than a gap -- but a reader should know which parts are approximate:
   knots and weights define, and drawn through 16 points per knot span; a SPLINE stored
   by fit points only is drawn through its fit points. A spline whose knots or weights do
   not add up to a definition is drawn as its control polygon, which does not lie on the
-  curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs.)
+  curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs; a mirrored ellipse -- normal
+  (0, 0, -1) -- runs the other way. An ELLIPSE on a tilted plane is drawn through 64 points
+  of its outline seen from above.)
 - **3DSOLID / REGION / POLYLINE_PFACE as isometric wireframes**: the model carries a
   solid's edges only; the renderer projects them isometrically and draws the lines.
 - **VIEWPORT and WIPEOUT as outlines**: a viewport's frame, a wipeout's clip boundary;

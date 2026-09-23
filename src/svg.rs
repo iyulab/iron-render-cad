@@ -260,6 +260,9 @@ fn resolve_stroke_widths(body: &str, effective_stroke_width: f64) -> String {
     out
 }
 
+/// Points an ELLIPSE on a tilted plane is drawn through.
+const ELLIPSE_SAMPLES: usize = 64;
+
 /// How far an ELLIPSE runs, in its own parameter: `TAU` for a full ellipse,
 /// otherwise the counter-clockwise span from `start` to `end` in (0, TAU).
 /// DXF 41/42 are parameters of the ellipse, not polar angles, and the curve
@@ -281,11 +284,31 @@ fn ellipse_sweep(start: f64, end: f64) -> f64 {
 /// * minor`, the minor axis being the major one turned a quarter turn
 /// counter-clockwise and scaled by `axis_ratio`.
 fn ellipse_point(el: &EllipseEntity, t: f64) -> Point2D {
-    let (mx, my) = (el.major_axis_endpoint.x, el.major_axis_endpoint.y);
-    let (nx, ny) = (-my * el.axis_ratio, mx * el.axis_ratio);
+    let m = el.major_axis_endpoint;
+    let n = ellipse_minor_axis(el);
     Point2D {
-        x: el.center.x + t.cos() * mx + t.sin() * nx,
-        y: el.center.y + t.cos() * my + t.sin() * ny,
+        x: el.center.x + t.cos() * m.x + t.sin() * n.x,
+        y: el.center.y + t.cos() * m.y + t.sin() * n.y,
+    }
+}
+
+/// The minor axis as a world vector: the unit normal crossed with the major
+/// axis, scaled by `axis_ratio` -- the direction the parameters turn
+/// towards. With the default normal (0, 0, 1) that is the major axis turned
+/// a quarter turn counter-clockwise; a mirrored ellipse's (0, 0, -1) turns
+/// it the other way.
+fn ellipse_minor_axis(el: &EllipseEntity) -> Point3D {
+    let (m, e) = (el.major_axis_endpoint, el.extrusion);
+    let len = (e.x * e.x + e.y * e.y + e.z * e.z).sqrt();
+    let (nx, ny, nz) = if len > 0.0 && len.is_finite() {
+        (e.x / len, e.y / len, e.z / len)
+    } else {
+        (0.0, 0.0, 1.0)
+    };
+    Point3D {
+        x: (ny * m.z - nz * m.y) * el.axis_ratio,
+        y: (nz * m.x - nx * m.z) * el.axis_ratio,
+        z: (nx * m.y - ny * m.x) * el.axis_ratio,
     }
 }
 
@@ -586,14 +609,33 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                     neg(rot)
                 ));
             }
+            let e = el.extrusion;
+            // Files write the Z axis with rounding noise in the other two
+            // components; a plane that far from level is still level.
+            let flat = e.x.abs().max(e.y.abs()) <= 1e-9 * e.z.abs();
+            if !flat {
+                // A tilted plane: its outline seen from above is not an
+                // ellipse with these axes, so it is drawn through points.
+                let points: Vec<Point2D> = (0..=ELLIPSE_SAMPLES)
+                    .map(|i| {
+                        ellipse_point(
+                            el,
+                            el.start_angle + sweep * (i as f64 / ELLIPSE_SAMPLES as f64),
+                        )
+                    })
+                    .collect();
+                return Some(polyline_element(&points, false, &color));
+            }
             // A partial ellipse: the same exact arc command ARC uses, with
             // the axes and rotation of the ellipse. Counter-clockwise in the
-            // drawing is clockwise once y is flipped, hence sweep-flag 0.
+            // drawing is clockwise once y is flipped, hence sweep-flag 0 --
+            // and 1 for a mirrored ellipse, whose parameters run clockwise.
             let p1 = ellipse_point(el, el.start_angle);
             let p2 = ellipse_point(el, el.start_angle + sweep);
             let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
+            let sweep_flag = if e.z < 0.0 { 1 } else { 0 };
             Some(format!(
-                "<path d=\"M {} {} A {rx} {ry} {} {large} 0 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+                "<path d=\"M {} {} A {rx} {ry} {} {large} {sweep_flag} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
                 p1.x,
                 neg(p1.y),
                 neg(rot),
@@ -1377,6 +1419,11 @@ mod tests {
             axis_ratio: 0.5,
             start_angle: start,
             end_angle: end,
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         })
     }
 
@@ -1462,5 +1509,43 @@ mod tests {
         };
         assert!(render_one(line(false)).contains("<line"));
         assert!(!render_one(line(true)).contains("<line"));
+    }
+
+    #[test]
+    fn a_mirrored_ellipse_arc_turns_the_other_way() {
+        use std::f64::consts::FRAC_PI_2;
+        let Entity::Ellipse(mut el) = ellipse(0.0, FRAC_PI_2) else {
+            unreachable!()
+        };
+        el.extrusion = Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: -1.0,
+        };
+        // The minor axis is now the major axis turned clockwise: (1, 0) long,
+        // so parameter pi/2 lands at (2, 1), and the arc runs clockwise.
+        let n = arc_numbers(&render_one(Entity::Ellipse(el)));
+        let [x1, y1, _rx, _ry, _rot, large, sweep, x2, y2] = n[..] else {
+            panic!("{n:?}")
+        };
+        assert_eq!((x1, -y1), (1.0, 3.0));
+        assert!(
+            (x2 - 2.0).abs() < 1e-12 && (-y2 - 1.0).abs() < 1e-12,
+            "({x2}, {y2})"
+        );
+        assert_eq!((large, sweep), (0.0, 1.0));
+    }
+
+    #[test]
+    fn an_ellipse_whose_normal_is_z_up_to_rounding_is_still_an_exact_arc() {
+        let Entity::Ellipse(mut el) = ellipse(0.0, 1.0) else {
+            unreachable!()
+        };
+        el.extrusion = Point3D {
+            x: 1e-17,
+            y: -2e-17,
+            z: 1.0,
+        };
+        assert!(render_one(Entity::Ellipse(el)).contains("<path d=\"M"));
     }
 }

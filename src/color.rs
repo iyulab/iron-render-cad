@@ -50,6 +50,26 @@ pub fn layer_color_hex(tables: &Tables, layer_name: &str) -> Option<String> {
     aci_to_hex(layer.color_index.unsigned_abs())
 }
 
+/// AutoCAD's layer 0, the one layer name with a meaning inside a block:
+/// geometry on layer 0 in a block definition is drawn on the layer of the
+/// block reference that places it.
+const LAYER_ZERO: &str = "0";
+
+/// The layer an entity is effectively on. `reference_layer` is the layer of
+/// the enclosing block reference -- `None` at the top level, where there is
+/// none -- and it applies only to an entity on layer 0, which takes the
+/// reference's layer; every other layer is used as the model states it.
+///
+/// Resolved here, at render time, not in the model: one block definition is
+/// placed by many references on many layers, so "the layer of this entity"
+/// only has an answer per reference.
+pub(crate) fn effective_layer<'a>(layer: &'a str, reference_layer: Option<&'a str>) -> &'a str {
+    match reference_layer {
+        Some(reference) if layer == LAYER_ZERO => reference,
+        _ => layer,
+    }
+}
+
 /// Resolves an entity's rendered color following AutoCAD's own precedence:
 /// explicit 24-bit truecolor overrides everything; otherwise `color_index`
 /// is either BYLAYER (256, resolved through the entity's own layer),
@@ -161,6 +181,14 @@ mod tests {
             negative, "#ffff00",
             "sign marks 'layer off', not a different color"
         );
+    }
+
+    #[test]
+    fn only_layer_zero_takes_the_references_layer() {
+        assert_eq!(effective_layer("0", Some("WALLS")), "WALLS");
+        assert_eq!(effective_layer("DOORS", Some("WALLS")), "DOORS");
+        // At the top level there is no reference to take a layer from.
+        assert_eq!(effective_layer("0", None), "0");
     }
 
     #[test]

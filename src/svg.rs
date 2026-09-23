@@ -24,7 +24,7 @@ mod hatch;
 mod infinite;
 mod spline;
 
-use crate::color::{resolve_color, DEFAULT_COLOR};
+use crate::color::{effective_layer, resolve_color, DEFAULT_COLOR};
 use crate::limits::{
     Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
     MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
@@ -188,6 +188,12 @@ struct Ctx<'a> {
     depth: u32,
     scale: f64,
     inherited_color: String,
+    /// The effective layer of the innermost enclosing block reference,
+    /// `None` at the top level: what a child on layer 0 resolves its
+    /// BYLAYER color against (see [`effective_layer`]). Already effective,
+    /// so a layer-0 reference nested in a layer-0 reference ends at the
+    /// outermost reference's layer.
+    inherited_layer: Option<String>,
     /// Local (inside the block being rendered) -> world, composed across
     /// nested block references through the model's placement arithmetic.
     transform: Affine2,
@@ -243,6 +249,7 @@ impl<'a> Ctx<'a> {
             depth: 0,
             scale: 1.0,
             inherited_color: DEFAULT_COLOR.to_string(),
+            inherited_layer: None,
             transform: Affine2::IDENTITY,
             frame: Frame::default(),
             svg_matrix: infinite::IDENTITY,
@@ -619,8 +626,9 @@ fn resolve_entity_color(common: &EntityCommon, ctx: &Ctx) -> String {
         common.true_color,
         // An absent or unresolved layer has no layer color to look up; the
         // fallback below is the renderer's own, and the model still says
-        // which of the two it was.
-        common.layer.name(),
+        // which of the two it was. Inside a block reference, layer 0 is the
+        // reference's layer.
+        effective_layer(common.layer.name(), ctx.inherited_layer.as_deref()),
         ctx.tables,
         &ctx.inherited_color,
     )
@@ -681,6 +689,9 @@ fn render_block_ref(
     let parent_depth = ctx.depth;
     let parent_scale = ctx.scale;
     let parent_inherited = std::mem::replace(&mut ctx.inherited_color, color.to_string());
+    let reference_layer =
+        effective_layer(owner.common().layer.name(), ctx.inherited_layer.as_deref()).to_string();
+    let parent_inherited_layer = ctx.inherited_layer.replace(reference_layer);
 
     // Which point of the block's own space its interior is written about.
     // For a drawing near the origin (the parent frame is the default) it is
@@ -773,6 +784,7 @@ fn render_block_ref(
     ctx.depth = parent_depth;
     ctx.scale = parent_scale;
     ctx.inherited_color = parent_inherited;
+    ctx.inherited_layer = parent_inherited_layer;
 
     if body_parts.is_empty() {
         ctx.empty_blocks.insert(block_name.to_string());

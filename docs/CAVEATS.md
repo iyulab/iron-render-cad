@@ -102,6 +102,12 @@ report as white unconditionally, so any resolved pure-white color is flipped to 
 otherwise it is silently invisible, white on white. Applied at every color-producing path,
 not just literal index 7. There is no option for a dark background.
 
+Inside a block reference, an entity on layer 0 is drawn on the reference's layer -- the
+standard way a symbol drawn on layer 0 takes the color of the layer it is inserted on --
+so a BYLAYER color there resolves through the reference's layer (for a nested reference
+itself on layer 0, the outermost one's). Every other layer is used as the model states it.
+This includes a DIMENSION's block: its layer-0 lines and text take the dimension's layer.
+
 There is no single canonical ACI-to-RGB table: AutoCAD's displayed colors depend on the
 drawing-area background. The palette the model carries is the long-published one; see
 `uncad-model`'s `color` module.

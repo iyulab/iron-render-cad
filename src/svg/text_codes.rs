@@ -335,8 +335,8 @@ mod tests {
         );
         assert_eq!(decode("trailing\\", true), "trailing\\");
         assert_eq!(
-            decode("방 101\\P면적 32.5\u{33A1}", true),
-            "방 101\n면적 32.5\u{33A1}"
+            decode("\u{BC29} 101\\P\u{BA74}\u{C801} 32.5\u{33A1}", true),
+            "\u{BC29} 101\n\u{BA74}\u{C801} 32.5\u{33A1}"
         );
     }
 

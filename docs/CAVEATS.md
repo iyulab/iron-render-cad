@@ -37,6 +37,9 @@ useful than a gap -- but a reader should know which parts are approximate:
   height taken as 1.2 times the text height times the spacing factor -- an estimate, since
   real line breaks and glyph metrics depend on the font. Where the drawing does not state
   the attachment, the insertion point is used as the first line's baseline.
+  An MTEXT's reference width -- the box the writing program wraps its paragraphs in -- is
+  not used to wrap: where a line breaks depends on the glyphs of the file's font, which
+  this renderer does not have, so each paragraph is drawn as one line.
 - **TEXT and ATTRIB are placed by their alignment point** when it is aligned otherwise than left and
   baseline: centered, right-aligned or middle text is anchored there (`text-anchor`,
   `dominant-baseline`), and aligned or fit text is stretched from its start point to it

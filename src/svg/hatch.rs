@@ -70,19 +70,30 @@ pub(super) fn render_hatch(h: &HatchEntity, color: &str, ctx: &mut Ctx) -> Optio
     Some(format!("{}\n  {outline}", pattern_fills.join("\n  ")))
 }
 
-/// Signed sweep angle from `start_angle` to `end_angle`, normalized into the
-/// half-open range implied by `is_ccw` -- AutoCAD's arc-direction convention,
-/// not just the shorter or positive arc.
-fn arc_sweep(start_angle: f64, end_angle: f64, is_ccw: bool) -> f64 {
-    let mut sweep = end_angle - start_angle;
+/// Where an arc or elliptical-arc edge starts, counter-clockwise from +x,
+/// and its signed sweep, in the loop's direction.
+///
+/// A counter-clockwise edge states its angles counter-clockwise and runs
+/// from `start_angle` up to `end_angle`. A clockwise edge states them the
+/// other way round: the format writes a clockwise edge's angles measured
+/// clockwise -- the complements of the counter-clockwise ones -- so it
+/// starts at `-start_angle` and runs clockwise down to `-end_angle`.
+fn edge_span(start_angle: f64, end_angle: f64, is_ccw: bool) -> (f64, f64) {
+    let tau = 2.0 * std::f64::consts::PI;
     if is_ccw {
+        let mut sweep = end_angle - start_angle;
         if sweep <= 0.0 {
-            sweep += 2.0 * std::f64::consts::PI;
+            sweep += tau;
         }
-    } else if sweep >= 0.0 {
-        sweep -= 2.0 * std::f64::consts::PI;
+        (start_angle, sweep)
+    } else {
+        let (from, to) = (-start_angle, -end_angle);
+        let mut sweep = to - from;
+        if sweep >= 0.0 {
+            sweep -= tau;
+        }
+        (from, sweep)
     }
-    sweep
 }
 
 /// A polyline boundary's points, its bulged segments chord-approximated the
@@ -120,11 +131,11 @@ fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
             end_angle,
             is_ccw,
         } => {
-            let sweep = arc_sweep(*start_angle, *end_angle, *is_ccw);
+            let (from, sweep) = edge_span(*start_angle, *end_angle, *is_ccw);
             let segments = 12;
             (0..segments)
                 .map(|i| {
-                    let a = start_angle + sweep * (i as f64 / segments as f64);
+                    let a = from + sweep * (i as f64 / segments as f64);
                     Point2D {
                         x: center.x + radius * a.cos(),
                         y: center.y + radius * a.sin(),
@@ -144,11 +155,11 @@ fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
             let minor_len = major_len * minor_major_ratio;
             let rot = end.y.atan2(end.x);
             let (cos_r, sin_r) = (rot.cos(), rot.sin());
-            let sweep = arc_sweep(*start_angle, *end_angle, *is_ccw);
+            let (from, sweep) = edge_span(*start_angle, *end_angle, *is_ccw);
             let segments = 16;
             (0..segments)
                 .map(|i| {
-                    let a = start_angle + sweep * (i as f64 / segments as f64);
+                    let a = from + sweep * (i as f64 / segments as f64);
                     let (ex, ey) = (major_len * a.cos(), minor_len * a.sin());
                     Point2D {
                         x: center.x + ex * cos_r - ey * sin_r,
@@ -299,12 +310,30 @@ mod tests {
     }
 
     #[test]
-    fn arc_sweep_matches_autocads_direction_convention() {
+    fn a_counter_clockwise_edge_runs_up_from_its_start_angle() {
         let pi = std::f64::consts::PI;
-        close(arc_sweep(0.0, pi / 2.0, true), pi / 2.0);
-        close(arc_sweep(pi / 2.0, 0.0, true), 1.5 * pi);
-        close(arc_sweep(0.0, pi / 2.0, false), -1.5 * pi);
-        close(arc_sweep(pi / 2.0, 0.0, false), -pi / 2.0);
+        let (from, sweep) = edge_span(0.0, pi / 2.0, true);
+        close(from, 0.0);
+        close(sweep, pi / 2.0);
+        let (_, sweep) = edge_span(pi / 2.0, 0.0, true);
+        close(sweep, 1.5 * pi);
+    }
+
+    #[test]
+    fn a_clockwise_edge_states_its_angles_measured_clockwise() {
+        // The quarter from the top of a circle clockwise to its right: the
+        // format writes it as 270 to 360 degrees measured clockwise. Read as
+        // counter-clockwise angles it would start at the bottom instead.
+        let pi = std::f64::consts::PI;
+        let (from, sweep) = edge_span(1.5 * pi, 2.0 * pi, false);
+        let at = |a: f64| (a.cos(), a.sin());
+        let (sx, sy) = at(from);
+        close(sx, 0.0);
+        close(sy, 1.0);
+        close(sweep, -pi / 2.0);
+        let (ex, ey) = at(from + sweep);
+        close(ex, 1.0);
+        close(ey, 0.0);
     }
 
     #[test]

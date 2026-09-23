@@ -497,7 +497,7 @@ fn rasterize(
 }
 
 /// `svg` parsed for drawing with `fonts`.
-fn parse(svg: &str, fonts: &Fonts) -> Result<usvg::Tree, PngError> {
+pub(crate) fn parse(svg: &str, fonts: &Fonts) -> Result<usvg::Tree, PngError> {
     usvg::Tree::from_str(svg, &usvg_options(fonts)).map_err(PngError::InvalidSvg)
 }
 

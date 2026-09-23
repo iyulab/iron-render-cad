@@ -11,6 +11,7 @@
 //! heights through [`crate::ToSvgOptions::cap_height`], the one metric a
 //! caller states.
 
+use super::bounds::Box2D;
 use super::format::{clean, escape_xml, neg, rotate_transform_attr, Frame};
 use super::ocs::Ocs;
 use super::Ctx;
@@ -183,9 +184,10 @@ impl TextLayout {
 }
 
 /// A single-line `<text>` -- TEXT, ATTRIB and TOLERANCE all render to this.
-/// `text` is what is shown, already decoded; the CAD height is the height
-/// of the capitals, written as the `font-size` that makes the capitals that
-/// tall in a face whose capitals are `cap_height` of the em.
+/// `id` is its `id` attribute (see [`super::scene::text_id`]); `text` is
+/// what is shown, already decoded; the CAD height is the height of the
+/// capitals, written as the `font-size` that makes the capitals that tall
+/// in a face whose capitals are `cap_height` of the em.
 ///
 /// A text that is only turned is written at its baseline's point with a
 /// `rotate()` about its anchor. One whose characters are stretched or
@@ -193,6 +195,7 @@ impl TextLayout {
 /// own axes: SVG lays the glyphs out -- `text-anchor` included -- in the
 /// element's coordinates, and the matrix then stretches and slants them.
 pub(super) fn text_element(
+    id: &str,
     layout: &TextLayout,
     color: &str,
     text: &str,
@@ -211,7 +214,7 @@ pub(super) fn text_element(
         Some(rotation) => {
             let _ = write!(
                 out,
-                "<text x=\"{x}\" y=\"{}\" font-size=\"{font_size}\" fill=\"{color}\" stroke=\"none\"{anchor_attr}{}>",
+                "<text id=\"{id}\" x=\"{x}\" y=\"{}\" font-size=\"{font_size}\" fill=\"{color}\" stroke=\"none\"{anchor_attr}{}>",
                 clean(y + baseline),
                 rotate_transform_attr(rotation, x, y),
             );
@@ -221,7 +224,7 @@ pub(super) fn text_element(
             let [a, b, c, d] = layout.axes;
             let _ = write!(
                 out,
-                "<text x=\"0\" y=\"{baseline}\" font-size=\"{font_size}\" fill=\"{color}\" stroke=\"none\"{anchor_attr} transform=\"matrix({} {} {} {} {x} {y})\">",
+                "<text id=\"{id}\" x=\"0\" y=\"{baseline}\" font-size=\"{font_size}\" fill=\"{color}\" stroke=\"none\"{anchor_attr} transform=\"matrix({} {} {} {} {x} {y})\">",
                 clean(a),
                 neg(b),
                 neg(c),
@@ -233,22 +236,23 @@ pub(super) fn text_element(
     out
 }
 
-/// Counts the box a single-line text is estimated to fill towards the
-/// extent, and its anchor point with it: [`CHAR_ADVANCE_EM`] per character
-/// wide and the height of its capitals tall (descenders are not counted),
-/// hung from the anchor the way it is drawn and taken
-/// through the text's own axes, so a stretched, slanted or turned text is
-/// measured as it is drawn. Glyph widths come from the font the rasterizer
-/// picks, not from here, so the width is an estimate; the anchor is exact.
-pub(super) fn consider_text_box(layout: &TextLayout, text: &str, ctx: &mut Ctx) {
+/// The points a single-line text's estimated box is taken through, in the
+/// entity's coordinates: its anchor, and -- when it shows any character --
+/// the four corners of a box [`CHAR_ADVANCE_EM`] per character wide and the
+/// height of its capitals tall (descenders are not counted), hung from the
+/// anchor the way it is drawn and taken through the text's own axes, so a
+/// stretched, slanted or turned text is measured as it is drawn. Glyph
+/// widths come from the font the rasterizer picks, not from here, so the
+/// width is an estimate; the anchor is exact.
+fn text_box_points(layout: &TextLayout, text: &str, cap_height: f64) -> Vec<Point2D> {
     let Anchor { at, anchor, drop } = layout.anchor;
-    ctx.consider(at.x, at.y);
+    let mut points = vec![at];
     let chars = text.chars().count();
     if chars == 0 {
-        return;
+        return points;
     }
     let h = layout.height;
-    let width = CHAR_ADVANCE_EM / ctx.cap_height * h * chars as f64;
+    let width = CHAR_ADVANCE_EM / cap_height * h * chars as f64;
     let (u0, u1) = match anchor {
         "middle" => (-width / 2.0, width / 2.0),
         "end" => (-width, 0.0),
@@ -257,8 +261,26 @@ pub(super) fn consider_text_box(layout: &TextLayout, text: &str, ctx: &mut Ctx) 
     let (v0, v1) = (-drop * h, -drop * h + h);
     let [a, b, c, d] = layout.axes;
     for (u, v) in [(u0, v0), (u1, v0), (u1, v1), (u0, v1)] {
-        ctx.consider(at.x + a * u + c * v, at.y + b * u + d * v);
+        points.push(Point2D {
+            x: at.x + a * u + c * v,
+            y: at.y + b * u + d * v,
+        });
     }
+    points
+}
+
+/// Counts a single-line text's estimated box (see [`text_box_points`])
+/// towards the extent, and returns it in world coordinates.
+pub(super) fn consider_text_box(layout: &TextLayout, text: &str, ctx: &mut Ctx) -> Option<Box2D> {
+    let points = text_box_points(layout, text, ctx.cap_height);
+    ctx.consider_all(&points);
+    ctx.world_box(&points)
+}
+
+/// A single-line text's estimated box (see [`text_box_points`]) in world
+/// coordinates, without counting it towards the extent.
+pub(super) fn estimate_text_box(layout: &TextLayout, text: &str, ctx: &Ctx) -> Option<Box2D> {
+    ctx.world_box(&text_box_points(layout, text, ctx.cap_height))
 }
 
 /// How big an MTEXT's block is, for its box: as wide and as tall as the
@@ -293,13 +315,13 @@ impl MTextBlock {
     }
 }
 
-/// Counts an MTEXT's box towards the extent, with its insertion point: the
-/// block hung from the insertion point the way the text is drawn from it --
-/// the attachment's column says which of its left edge, middle or right
-/// edge the point is on, its row which of its top, middle or bottom, and a
-/// block with no stated attachment has its first baseline on the point
-/// (`text_height` below the block's top) and runs right -- turned by the
-/// text's rotation about the point.
+/// Counts an MTEXT's box towards the extent, with its insertion point, and
+/// returns it in world coordinates: the block hung from the insertion point
+/// the way the text is drawn from it -- the attachment's column says which
+/// of its left edge, middle or right edge the point is on, its row which of
+/// its top, middle or bottom, and a block with no stated attachment has its
+/// first baseline on the point (`text_height` below the block's top) and
+/// runs right -- turned by the text's rotation about the point.
 pub(super) fn consider_mtext_box(
     at: Point2D,
     rotation: f64,
@@ -307,9 +329,9 @@ pub(super) fn consider_mtext_box(
     block: &MTextBlock,
     text_height: f64,
     ctx: &mut Ctx,
-) {
+) -> Option<Box2D> {
     use MTextAttachment as A;
-    ctx.consider(at.x, at.y);
+    let mut points = vec![at];
     let (w, h) = (block.width, block.height);
     let (u0, u1) = match attachment {
         Some(A::TopCenter | A::MiddleCenter | A::BottomCenter) => (-w / 2.0, w / 2.0),
@@ -324,8 +346,13 @@ pub(super) fn consider_mtext_box(
     };
     let (sin, cos) = rotation.sin_cos();
     for (u, v) in [(u0, v0), (u1, v0), (u1, v1), (u0, v1)] {
-        ctx.consider(at.x + cos * u - sin * v, at.y + sin * u + cos * v);
+        points.push(Point2D {
+            x: at.x + cos * u - sin * v,
+            y: at.y + sin * u + cos * v,
+        });
     }
+    ctx.consider_all(&points);
+    ctx.world_box(&points)
 }
 
 #[cfg(test)]

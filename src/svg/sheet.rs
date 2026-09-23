@@ -20,7 +20,7 @@ use super::{
 };
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
-use uncad_model::model::{Entity, Point2D, ViewportEntity, ViewportView};
+use uncad_model::model::{Entity, EntityId, Point2D, ViewportEntity, ViewportView};
 use uncad_model::tables::{LayoutRecord, PlotPaperUnits, PlotRotation};
 use uncad_model::{Affine2, CadDatabase};
 
@@ -125,7 +125,10 @@ pub(crate) fn render_layout(
             .iter()
             .filter_map(|l| l.resolved().cloned())
             .collect();
+        ctx.id_path.push(vp.common.id);
+        let texts_before = ctx.texts.len();
         let parts = walk(&model, &mut ctx);
+        ctx.id_path.pop();
         ctx.frame = paper_frame;
         ctx.transform = Affine2::IDENTITY;
         ctx.svg_matrix = infinite::IDENTITY;
@@ -141,7 +144,7 @@ pub(crate) fn render_layout(
             min_y: vp.center.y - vp.height / 2.0,
             max_y: vp.center.y + vp.height / 2.0,
         };
-        let shown: Vec<String> = parts
+        let (shown_ids, shown): (BTreeSet<EntityId>, Vec<String>) = parts
             .into_iter()
             .filter(|(part, svg)| {
                 !svg.is_empty()
@@ -150,8 +153,16 @@ pub(crate) fn render_layout(
                             .extent
                             .is_some_and(|b| intersects(&Box2D::from(b), &frame_box)))
             })
-            .map(|(_, svg)| svg)
-            .collect();
+            .map(|(part, svg)| (part.id, svg))
+            .unzip();
+        // The texts of the entities this frame does not show are not on
+        // the sheet: their paths are the viewport's, then the entity's.
+        let walked_texts = ctx.texts.split_off(texts_before);
+        ctx.texts.extend(
+            walked_texts
+                .into_iter()
+                .filter(|t| t.path.get(1).is_some_and(|id| shown_ids.contains(id))),
+        );
         if shown.is_empty() {
             continue;
         }

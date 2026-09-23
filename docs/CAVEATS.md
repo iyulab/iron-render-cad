@@ -338,6 +338,15 @@ the only fonts, text is drawn in the family of the first face, and the picture n
 depends on the host. The caller then also states that face's capital height
 (`ToSvgOptions::cap_height`).
 
+While it walks the drawing the renderer has no fonts, so the box a text counts towards the
+extent is an estimate: 0.6 em a character and a capital tall. A face wider or narrower than
+that -- a Hangul syllable is about 0.9 em -- runs past it or falls short. `Scene::text_boxes`
+lays every text of a scene out with the fonts it is given and returns both boxes; the
+measured one is the box of the glyph outlines, taken through every enclosing placement, so
+for a turned text it is the box of its turned outline box. Every `<text>` carries the path
+of the entity that drew it as its `id` (`t` and the reference IDs, outermost block
+reference first), which is how the two are matched.
+
 ## No image comparison, by design
 
 No test in this crate decides pass/fail by comparing rendered images, and the crate has no

@@ -40,7 +40,7 @@ mod text_codes;
 mod visibility;
 
 pub use crop::{Crop, CropReport, LeftOut, LeftOutReason};
-pub use scene::{Part, Rect, Scene};
+pub use scene::{Part, Rect, Scene, TextBox};
 pub(crate) use sheet::render_layout;
 pub use sheet::LayoutError;
 pub use visibility::Hidden;
@@ -299,6 +299,12 @@ struct Ctx<'a> {
     /// Entities [`render_entity`] found hidden (see
     /// [`ToSvgResult::hidden`]).
     hidden: usize,
+    /// The reference IDs of the block references the walk is inside,
+    /// outermost first -- on a sheet, after the viewport's own: what a
+    /// text's path ([`TextBox::path`]) starts with.
+    id_path: Vec<EntityId>,
+    /// Every text drawn so far, in drawing order (see [`Scene::text_boxes`]).
+    texts: Vec<scene::DrawnText>,
 }
 
 impl<'a> Ctx<'a> {
@@ -342,6 +348,7 @@ impl<'a> Ctx<'a> {
             hidden: self.hidden,
             undrawn_viewports: Vec::new(),
             crop,
+            texts: self.texts,
         }
     }
 
@@ -373,6 +380,8 @@ impl<'a> Ctx<'a> {
             include_hidden: false,
             viewport_frozen: BTreeSet::new(),
             hidden: 0,
+            id_path: Vec::new(),
+            texts: Vec::new(),
         }
     }
 
@@ -464,6 +473,51 @@ impl<'a> Ctx<'a> {
         for p in points {
             self.consider(p.x, p.y);
         }
+    }
+
+    /// The world box of *local* `points`, taken through the current
+    /// transform like [`consider`](Self::consider) takes them; a point the
+    /// transform sends past what a number holds is left out. `None` when
+    /// none is left.
+    fn world_box(&self, points: &[Point2D]) -> Option<Box2D> {
+        let mut b: Option<Box2D> = None;
+        for p in points {
+            let Point2D { x, y } = self.transform.apply(*p);
+            if !x.is_finite() || !y.is_finite() {
+                continue;
+            }
+            let grown = match b {
+                None => Box2D {
+                    min_x: x,
+                    max_x: x,
+                    min_y: y,
+                    max_y: y,
+                },
+                Some(b) => Box2D {
+                    min_x: b.min_x.min(x),
+                    max_x: b.max_x.max(x),
+                    min_y: b.min_y.min(y),
+                    max_y: b.max_y.max(y),
+                },
+            };
+            b = Some(grown);
+        }
+        b
+    }
+
+    /// Records a text the entity `id` draws here -- showing `text`, its
+    /// estimated world box `estimate` -- and returns the `id` attribute its
+    /// `<text>` carries: see [`scene::text_id`].
+    fn record_text(&mut self, id: EntityId, text: &str, estimate: Option<Box2D>) -> String {
+        let mut path = self.id_path.clone();
+        path.push(id);
+        let attribute = scene::text_id(&path);
+        self.texts.push(scene::DrawnText {
+            path,
+            text: text.to_string(),
+            estimate,
+        });
+        attribute
     }
 
     /// How far a text's descenders reach below its baseline, in text
@@ -1113,6 +1167,7 @@ fn render_block_ref(
     };
     ctx.depth = parent_depth + 1;
     ctx.scale = cumulative_scale;
+    ctx.id_path.push(owner.common().id);
 
     // An ATTRIB the block lists among its children is drawn by the loop
     // below as it is met; the same ATTRIB may also hang off its INSERT's
@@ -1150,6 +1205,7 @@ fn render_block_ref(
         }
     }
 
+    ctx.id_path.pop();
     ctx.transform = parent_transform;
     ctx.frame = parent_frame;
     ctx.svg_matrix = parent_svg_matrix;
@@ -1698,8 +1754,10 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             )
             .in_plane(own_plane(t.extrusion), t.elevation);
             let text = text_codes::decode(&t.text, false);
-            justify::consider_text_box(&layout, &text, ctx);
+            let estimate = justify::consider_text_box(&layout, &text, ctx);
+            let id = ctx.record_text(t.common.id, &text, estimate);
             Some(justify::text_element(
+                &id,
                 &layout,
                 &color,
                 &text,
@@ -1727,8 +1785,10 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 return Some(String::new());
             }
             let text = text_codes::decode(&a.text, false);
-            justify::consider_text_box(&layout, &text, ctx);
+            let estimate = justify::consider_text_box(&layout, &text, ctx);
+            let id = ctx.record_text(a.common.id, &text, estimate);
             Some(justify::text_element(
+                &id,
                 &layout,
                 &color,
                 &text,
@@ -1771,7 +1831,12 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 0.0,
                 1.0,
             );
+            // Its box is not counted towards the extent (the insertion
+            // point is), but it is estimated like any text's.
+            let estimate = justify::estimate_text_box(&layout, &t.text_value, ctx);
+            let id = ctx.record_text(t.common.id, &t.text_value, estimate);
             Some(justify::text_element(
+                &id,
                 &layout,
                 &color,
                 &t.text_value,
@@ -1812,7 +1877,9 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 text_height + line_height * lines.len().saturating_sub(1) as f64,
                 ctx.cap_height,
             );
-            justify::consider_mtext_box(at, m.rotation, m.attachment, &block, text_height, ctx);
+            let estimate =
+                justify::consider_mtext_box(at, m.rotation, m.attachment, &block, text_height, ctx);
+            let id = ctx.record_text(m.common.id, &lines.join("\n"), estimate);
             let font_size = text_height / ctx.cap_height;
             let (x, y) = (frame.x(m.insertion_point.x), frame.y(m.insertion_point.y));
             let (anchor, first_baseline) =
@@ -1839,7 +1906,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 dy = 0.0;
             }
             Some(format!(
-                "<text x=\"{x}\" y=\"{first_baseline}\" font-size=\"{font_size}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
+                "<text id=\"{id}\" x=\"{x}\" y=\"{first_baseline}\" font-size=\"{font_size}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
                 neg(m.rotation.to_degrees())
             ))
         }

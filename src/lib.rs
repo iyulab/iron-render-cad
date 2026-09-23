@@ -15,8 +15,9 @@
 //! viewports ([`layout_to_svg`], [`layout_to_png`]). A [`Scene`] keeps one
 //! render -- a [`Part`] per top-level entity, with the box of the world it
 //! covers -- to write documents of any window from any subset of its parts,
-//! and PNGs of any [`View`] (a grid of pixels laid over the world): render
-//! once, assemble many. A render is for people and for an agent's
+//! and PNGs of any [`View`] (a grid of pixels laid over the world), and
+//! says where each of its texts lands ([`Scene::text_boxes`]): render once,
+//! assemble many. A render is for people and for an agent's
 //! fallback view; it is never evidence that a drawing or an edit is
 //! correct.
 //!
@@ -36,5 +37,5 @@ pub use png::{
 };
 pub use svg::{
     layout_to_svg, to_svg, Crop, CropReport, Hidden, LayoutError, LeftOut, LeftOutReason, Part,
-    Rect, Scene, Space, ToSvgOptions, ToSvgResult, DEFAULT_CAP_HEIGHT,
+    Rect, Scene, Space, TextBox, ToSvgOptions, ToSvgResult, DEFAULT_CAP_HEIGHT,
 };

@@ -17,6 +17,10 @@ use super::{
     ToSvgOptions,
 };
 use crate::limits::LimitReport;
+use crate::png::{parse, Fonts, PngError};
+use resvg::usvg;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use uncad_model::model::{EntityId, Point2D};
 use uncad_model::CadDatabase;
 
@@ -123,6 +127,61 @@ pub struct Part {
     pub through_viewport: bool,
 }
 
+/// Where one text of a [`Scene`] is: the box the renderer estimated for it
+/// while walking, and the box its glyphs fill once a set of fonts lays them
+/// out.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct TextBox {
+    /// Which text this is: the text entity's reference ID, after the IDs
+    /// of the block references it is drawn inside, outermost first -- and,
+    /// on a layout's sheet, for the model drawn through a viewport, after
+    /// that VIEWPORT's ID. A text inside a block placed twice is two boxes;
+    /// the first ID is always the [`Part`] that draws it. The document's
+    /// `<text>` element carries the path as its `id`: `t` and the IDs'
+    /// values joined by `.` (`t12.40`).
+    pub path: Vec<EntityId>,
+    /// What it shows: its string with the control codes read, as drawn --
+    /// an MTEXT's lines joined by `\n`.
+    pub text: String,
+    /// The box the renderer estimated while walking, in world units: its
+    /// anchor, and a box 0.6 em a character wide and a capital tall, hung
+    /// as the text is justified and taken through its own axes and every
+    /// enclosing placement -- what the extent counted (except a TOLERANCE
+    /// frame's, which counts its insertion point only). `None` when the
+    /// placement took it past what a number holds.
+    pub estimate: Option<Rect>,
+    /// The box of its glyph outlines as the fonts lay them out, in world
+    /// units, through every enclosing placement (a turned text's box is the
+    /// box of its turned outline box). `None` when nothing was laid out:
+    /// no face had any of its glyphs, or it shows only spaces.
+    pub measured: Option<Rect>,
+    /// How many of its glyphs the fonts did not have and drew as the
+    /// face's missing-glyph shape.
+    pub missing_glyphs: usize,
+}
+
+/// A text a walk drew, before any font laid it out.
+pub(super) struct DrawnText {
+    pub(super) path: Vec<EntityId>,
+    pub(super) text: String,
+    pub(super) estimate: Option<Box2D>,
+}
+
+/// The `id` attribute of the `<text>` a text with this path is drawn as:
+/// `t`, then the IDs' values joined by `.`. Unique in a document, since a
+/// model's reference IDs are.
+pub(super) fn text_id(path: &[EntityId]) -> String {
+    let mut id = String::from("t");
+    for (i, e) in path.iter().enumerate() {
+        if i > 0 {
+            id.push('.');
+        }
+        let _ = write!(id, "{}", e.value());
+    }
+    id
+}
+
 /// A render kept for assembling: the drawing walked once, its top-level
 /// entities as [`Part`]s, from which [`svg`](Self::svg) writes a document
 /// for any window of the world and any subset of the parts.
@@ -161,6 +220,8 @@ pub struct Scene {
     pub hidden: usize,
     pub undrawn_viewports: Vec<EntityId>,
     pub crop: CropReport,
+    /// Every text drawn, in drawing order; see [`text_boxes`](Self::text_boxes).
+    pub(super) texts: Vec<DrawnText>,
 }
 
 /// The document-frame viewBox `[x, y, width, height]` of `window` for a
@@ -232,6 +293,64 @@ impl Scene {
         self.assemble(view_box, stroke_width, |i| keep(&self.parts[i]))
     }
 
+    /// Every text the scene drew, in drawing order -- the ones in parts
+    /// the crop set aside included -- with the box the renderer estimated
+    /// and the box its glyphs fill when laid out with `fonts`, the way
+    /// [`Scene::png`] draws them: a label's real extent, which the estimate
+    /// can miss by the width of a few characters in a face wider or
+    /// narrower than 0.6 em a character (a Hangul syllable is about 0.9).
+    ///
+    /// The texts are laid out once, in one document; the text's `id`
+    /// attribute ([`TextBox::path`]) is how each box is found.
+    pub fn text_boxes(&self, fonts: &Fonts) -> Result<Vec<TextBox>, PngError> {
+        let mut boxes: Vec<TextBox> = self
+            .texts
+            .iter()
+            .map(|t| TextBox {
+                path: t.path.clone(),
+                text: t.text.clone(),
+                estimate: t.estimate.map(Rect::from),
+                measured: None,
+                missing_glyphs: 0,
+            })
+            .collect();
+        if boxes.is_empty() {
+            return Ok(boxes);
+        }
+        let by_id: BTreeMap<String, usize> = boxes
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (text_id(&b.path), i))
+            .collect();
+        let document = self.assemble(self.doc_view_box, self.auto_stroke_width, |i| {
+            self.body[i].contains("<text")
+        });
+        let tree = parse(&document, fonts)?;
+        let mut found = Vec::new();
+        collect_texts(tree.root(), &mut found);
+        // The canvas is the viewBox moved to (0, 0), y down, one unit a
+        // unit: a canvas point is the document point less the viewBox's
+        // corner, and the document is written about the origin.
+        let [vx, vy, _, _] = self.doc_view_box;
+        for (id, canvas, missing) in found {
+            let Some(&i) = by_id.get(&id) else { continue };
+            let world = Rect::new(
+                self.origin.x + vx + f64::from(canvas.left()),
+                self.origin.y - (vy + f64::from(canvas.bottom())),
+                self.origin.x + vx + f64::from(canvas.right()),
+                self.origin.y - (vy + f64::from(canvas.top())),
+            );
+            let finite = [world.min_x, world.min_y, world.max_x, world.max_y]
+                .iter()
+                .all(|v| v.is_finite());
+            if finite {
+                boxes[i].measured = Some(world);
+                boxes[i].missing_glyphs = missing;
+            }
+        }
+        Ok(boxes)
+    }
+
     /// The document of every part the crop did not set aside, at
     /// `stroke_width`: what [`crate::to_svg`] writes.
     pub(crate) fn document(&self, stroke_width: f64) -> String {
@@ -282,6 +401,26 @@ impl Scene {
     }
 }
 
+/// Every text node under `group` that has an id and laid out at least one
+/// glyph: its id, the box of its glyph outlines on the canvas, and how many
+/// of its glyphs are the missing-glyph shape.
+fn collect_texts(group: &usvg::Group, out: &mut Vec<(String, usvg::Rect, usize)>) {
+    for node in group.children() {
+        match node {
+            usvg::Node::Group(g) => collect_texts(g, out),
+            usvg::Node::Text(t) if !t.id().is_empty() => {
+                let glyphs = t.layouted().iter().flat_map(|span| &span.positioned_glyphs);
+                let (count, missing) =
+                    glyphs.fold((0, 0), |(n, m), g| (n + 1, m + usize::from(g.id.0 == 0)));
+                if count > 0 {
+                    out.push((t.id().to_string(), t.abs_stroke_bounding_box(), missing));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +443,13 @@ mod tests {
         assert!(a.intersects(&Rect::new(1.0, 1.0, 2.0, 2.0)));
         assert!(!a.intersects(&Rect::new(1.5, 0.0, 2.0, 1.0)));
         assert_eq!((a.width(), a.height()), (1.0, 1.0));
+    }
+
+    #[test]
+    fn a_texts_id_is_its_path() {
+        let path = [EntityId::new(12), EntityId::new(40), EntityId::new(7)];
+        assert_eq!(text_id(&path), "t12.40.7");
+        assert_eq!(text_id(&path[..1]), "t12");
     }
 
     #[test]

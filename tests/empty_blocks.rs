@@ -36,6 +36,7 @@ fn insert(id: u64, block_name: &str) -> Entity {
         scale: p3(1.0, 1.0, 1.0),
         rotation: 0.0,
         attribs: Vec::new(),
+        extrusion: p3(0.0, 0.0, 1.0),
     })
 }
 

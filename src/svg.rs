@@ -807,10 +807,7 @@ fn resolve_entity_color(common: &EntityCommon, ctx: &Ctx) -> String {
 /// real values are separate top-level ATTRIB entities already rendered.
 fn render_block_ref(
     block_name: &str,
-    insertion_point: Point2D,
-    x_scale: f64,
-    y_scale: f64,
-    rotation: f64,
+    child_transform: Affine2,
     color: &str,
     ctx: &mut Ctx,
 ) -> String {
@@ -826,7 +823,6 @@ fn render_block_ref(
     }
     ctx.block_ref_budget -= 1;
 
-    let child_transform = Affine2::placement(insertion_point, x_scale, y_scale, rotation);
     // Compose: local (within the block) -> world, via this block's own
     // placement followed by the parent's already-established one. The
     // parent's own state is restored afterwards.
@@ -1193,42 +1189,42 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 neg(y1), neg(y2)
             ))
         }
-        Entity::Insert(i) => Some(render_block_ref(
-            i.block_name.name(),
-            Point2D {
-                x: i.insertion_point.x,
-                y: i.insertion_point.y,
-            },
-            i.scale.x,
-            i.scale.y,
-            i.rotation,
-            &color,
-            ctx,
-        )),
+        Entity::Insert(i) => {
+            // In a plane parallel to the world's -- the world's own, or a
+            // mirror copy's -- the model places the block exactly. A tilted
+            // plane has no exact 2D placement: the block is placed in its
+            // plane and that plane seen from above, as a HATCH is.
+            let placement = i.world_transform().unwrap_or_else(|| {
+                i.transform().then(&plane_seen_from_above(
+                    own_plane(i.extrusion),
+                    i.insertion_point.z,
+                ))
+            });
+            Some(render_block_ref(
+                i.block_name.name(),
+                placement,
+                &color,
+                ctx,
+            ))
+        }
         Entity::AcadTable(a) => Some(render_block_ref(
             a.block_name.name(),
-            Point2D {
-                x: a.insertion_point.x,
-                y: a.insertion_point.y,
-            },
-            a.scale.x,
-            a.scale.y,
-            a.rotation,
+            Affine2::placement(
+                Point2D {
+                    x: a.insertion_point.x,
+                    y: a.insertion_point.y,
+                },
+                a.scale.x,
+                a.scale.y,
+                a.rotation,
+            ),
             &color,
             ctx,
         )),
         Entity::Dimension(d) => {
             // The cached geometry block is already in final world coordinates,
             // so it is drawn with an identity transform.
-            let svg = render_block_ref(
-                d.block_name.name(),
-                Point2D { x: 0.0, y: 0.0 },
-                1.0,
-                1.0,
-                0.0,
-                &color,
-                ctx,
-            );
+            let svg = render_block_ref(d.block_name.name(), Affine2::IDENTITY, &color, ctx);
             if svg.is_empty() {
                 ctx.unsupported.insert("DIMENSION".to_string());
                 return None;
@@ -1569,6 +1565,11 @@ mod tests {
                     },
                     rotation: 0.0,
                     attribs: Vec::new(),
+                    extrusion: Point3D {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
                 })
             })
             .collect();
@@ -1586,15 +1587,7 @@ mod tests {
         };
 
         let mut ctx = Ctx::new(&tables);
-        let svg = render_block_ref(
-            "R",
-            Point2D { x: 0.0, y: 0.0 },
-            1.0,
-            1.0,
-            0.0,
-            DEFAULT_COLOR,
-            &mut ctx,
-        );
+        let svg = render_block_ref("R", Affine2::IDENTITY, DEFAULT_COLOR, &mut ctx);
         assert!(
             !svg.is_empty(),
             "the shallow levels within budget should still render something"
@@ -1949,6 +1942,71 @@ mod tests {
         let [_, _, w, height] = view_box(&svg);
         // Width 2 and height 2 cos 45, each with the same padding.
         close(w - height, 2.0 - 2.0 * h);
+    }
+
+    #[test]
+    fn a_mirrored_block_reference_is_placed_where_the_world_sees_it() {
+        use std::collections::BTreeMap;
+        use uncad_model::model::{InsertEntity, LineEntity, Ref};
+        use uncad_model::tables::BlockRecord;
+        let line = Entity::Line(LineEntity {
+            common: plain_common(),
+            start_point: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            end_point: Point3D {
+                x: 8.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        });
+        let mut block_records = BTreeMap::new();
+        block_records.insert(
+            "M".to_string(),
+            BlockRecord {
+                name: "M".to_string(),
+                entities: vec![line],
+            },
+        );
+        let db = CadDatabase {
+            entities: vec![Entity::Insert(InsertEntity {
+                common: plain_common(),
+                block_name: Ref::Resolved("M".to_string()),
+                insertion_point: Point3D {
+                    x: -175.0,
+                    y: -66.0,
+                    z: 0.0,
+                },
+                scale: Point3D {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+                rotation: 0.0,
+                attribs: Vec::new(),
+                extrusion: mirrored(),
+            })],
+            tables: Tables {
+                block_records,
+                ..Tables::default()
+            },
+            read_diagnostics: Default::default(),
+        };
+        let svg = to_svg(
+            &db,
+            ToSvgOptions {
+                space: Space::All,
+                ..ToSvgOptions::default()
+            },
+        )
+        .svg;
+        // Written at x -175 in a system whose x is the world's -x: the line
+        // runs from world x 175 back to 167, so the view is centred on 171.
+        let [x, _, w, _] = view_box(&svg);
+        close(x + w / 2.0, 171.0);
+        assert!(svg.contains("<g transform=\"matrix(-1 "), "{svg}");
     }
 
     #[test]

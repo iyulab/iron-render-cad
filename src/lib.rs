@@ -7,7 +7,8 @@
 //! nothing to the picture in [`ToSvgResult::empty_blocks`], one whose block
 //! the model does not hold in [`ToSvgResult::unresolved_block_refs`], and
 //! what the bounds on the file's numbers left out in
-//! [`ToSvgResult::limits`] -- rather than dropped in silence. A render is
+//! [`ToSvgResult::limits`] -- rather than dropped in silence -- and what the
+//! drawing itself hides is counted in [`ToSvgResult::hidden`]. A render is
 //! for people and for an agent's fallback view; it is never evidence that a
 //! drawing or an edit is correct.
 //!

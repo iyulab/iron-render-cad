@@ -45,9 +45,17 @@ useful than a gap -- but a reader should know which parts are approximate:
   their characters. Everything is drawn in one plain face; underline and overline toggles
   draw nothing. A TEXT whose file stores height 0 ("the style's height", which the model
   does not carry) is drawn at height 1.
-- **Invisible entities are not drawn**: an entity the drawing marks invisible (a dynamic
-  block's hidden visibility states) is left out, and does not count towards the extent. A
-  block reference whose block holds only such entities is reported in `empty_blocks`.
+- **What the drawing hides is not drawn**: an entity the drawing marks invisible (a dynamic
+  block's hidden visibility states), an attribute whose own invisible flag is set, anything on
+  the `DEFPOINTS` layer (which AutoCAD never plots) and anything on a layer that is off, frozen
+  or stated not to plot are left out and do not count towards the extent. A layer whose file
+  does not say whether it plots is plotted. `ToSvgResult::hidden` counts them, and
+  `ToSvgOptions::include_hidden` draws them at half opacity instead -- still outside the
+  extent. Inside a block an entity on layer 0 is judged by the reference's layer, like its
+  colour; a hidden block reference hides everything it draws, including contents on layers
+  that are shown (AutoCAD shows those when the reference's layer is merely off rather than
+  frozen). A block reference whose block holds only hidden entities is reported in
+  `empty_blocks`.
 - **TEXT and ATTRIB are placed by their justification**: a left/baseline text by its start
   point, every other one by its alignment point -- anchored at the start, the middle or the
   end of its baseline, and hung from its baseline, its middle, the top of its capitals or the

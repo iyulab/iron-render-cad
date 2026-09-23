@@ -31,6 +31,7 @@ mod justify;
 mod ocs;
 mod polyline;
 mod spline;
+mod visibility;
 
 use crate::color::{effective_layer, resolve_color, DEFAULT_COLOR};
 use crate::limits::{
@@ -78,6 +79,13 @@ pub struct ToSvgOptions {
     /// [`DEFAULT_CAP_HEIGHT`]; a value that is not a positive number is
     /// taken as the default.
     pub cap_height: f64,
+    /// Draw the entities the drawing hides at half opacity instead of
+    /// leaving them out: an entity marked invisible (DXF 60), an attribute
+    /// whose own invisible flag is set (DXF 70), anything on the
+    /// `DEFPOINTS` layer, and anything on a layer that is off, frozen or
+    /// stated not to plot. Default `false`. Either way they do not count
+    /// towards the extent, and [`ToSvgResult::hidden`] counts them.
+    pub include_hidden: bool,
 }
 
 /// [`ToSvgOptions::cap_height`]'s default, 0.7: sans-serif faces measure
@@ -94,6 +102,7 @@ impl Default for ToSvgOptions {
             space: Space::Model,
             outlier_trim: true,
             cap_height: DEFAULT_CAP_HEIGHT,
+            include_hidden: false,
         }
     }
 }
@@ -125,6 +134,12 @@ pub struct ToSvgResult {
     /// picture -- empty for every well-formed drawing. See
     /// [`crate::limits`].
     pub limits: LimitReport,
+    /// How many times the render met an entity the drawing hides (see
+    /// [`ToSvgOptions::include_hidden`]), block contents included: a hidden
+    /// entity in a block referenced twice counts twice, and the contents of
+    /// a hidden block reference are not visited at all. Left out of the
+    /// picture, or drawn faded when asked, and never part of the extent.
+    pub hidden: usize,
     /// The world point the SVG's coordinates are written relative to: an
     /// SVG user unit at `(u, v)` is the world point `(origin.x + u,
     /// origin.y - v)`, the viewBox included. `(0, 0)` -- the SVG reads in
@@ -243,6 +258,11 @@ struct Ctx<'a> {
     /// [`ToSvgOptions::cap_height`], checked: what a text height is divided
     /// by to give the `font-size` it is written at.
     cap_height: f64,
+    /// [`ToSvgOptions::include_hidden`].
+    include_hidden: bool,
+    /// Entities [`render_entity`] found hidden (see
+    /// [`ToSvgResult::hidden`]).
+    hidden: usize,
 }
 
 impl<'a> Ctx<'a> {
@@ -271,6 +291,8 @@ impl<'a> Ctx<'a> {
             part_truncated: false,
             limits: LimitReport::default(),
             cap_height: DEFAULT_CAP_HEIGHT,
+            include_hidden: false,
+            hidden: 0,
         }
     }
 
@@ -279,6 +301,24 @@ impl<'a> Ctx<'a> {
         self.ent_max_x = f64::NEG_INFINITY;
         self.ent_min_y = f64::INFINITY;
         self.ent_max_y = f64::NEG_INFINITY;
+    }
+
+    /// The running bounds, to be put back with
+    /// [`set_bounds`](Self::set_bounds).
+    fn bounds(&self) -> [f64; 4] {
+        [
+            self.ent_min_x,
+            self.ent_max_x,
+            self.ent_min_y,
+            self.ent_max_y,
+        ]
+    }
+
+    fn set_bounds(&mut self, [min_x, max_x, min_y, max_y]: [f64; 4]) {
+        self.ent_min_x = min_x;
+        self.ent_max_x = max_x;
+        self.ent_min_y = min_y;
+        self.ent_max_y = max_y;
     }
 
     fn entity_box(&self) -> Option<Box2D> {
@@ -862,9 +902,14 @@ fn render_block_ref(
 /// while `consider` separately tracks world-space bounds through that same
 /// transform.
 fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
-    // The file hides it: not drawn, and not part of the drawing's extent.
-    if e.common().invisible {
-        return None;
+    // The drawing hides it: not drawn -- or drawn faded, when asked -- and
+    // not part of the extent either way.
+    let hidden = visibility::hidden_reason(e, ctx.tables, ctx.inherited_layer.as_deref()).is_some();
+    if hidden {
+        ctx.hidden += 1;
+        if !ctx.include_hidden {
+            return None;
+        }
     }
     // The caps between a malformed file and an unbounded allocation (see
     // [`crate::limits`]), checked before any work is done for this entity,
@@ -900,7 +945,18 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         return None;
     }
     let before = ctx.emitted;
-    let svg = draw_entity(e, ctx);
+    let bounds = ctx.bounds();
+    let mut svg = draw_entity(e, ctx);
+    if hidden {
+        ctx.set_bounds(bounds);
+        svg = svg.map(|svg| {
+            if svg.is_empty() {
+                svg
+            } else {
+                format!("<g opacity=\"0.5\">{svg}</g>")
+            }
+        });
+    }
     // The string handed back contains everything the children below this
     // call already charged, so the total is set to its length rather than
     // incremented by it: nothing is counted twice.
@@ -1955,6 +2011,7 @@ pub(crate) struct Rendered {
     pub(crate) unresolved_block_refs: Vec<EntityId>,
     pub(crate) limits: LimitReport,
     pub(crate) origin: Point2D,
+    pub(crate) hidden: usize,
 }
 
 /// Renders every entity of `options.space`, measures the extent and settles
@@ -1977,6 +2034,7 @@ pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Rendered {
     if options.cap_height.is_finite() && options.cap_height > 0.0 {
         ctx.cap_height = options.cap_height;
     }
+    ctx.include_hidden = options.include_hidden;
     for e in selected {
         ctx.reset_entity_bounds();
         ctx.entity_start = ctx.emitted;
@@ -2045,6 +2103,7 @@ pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Rendered {
         unresolved_block_refs: ctx.unresolved_block_refs.into_iter().collect(),
         limits: ctx.limits,
         origin,
+        hidden: ctx.hidden,
     }
 }
 
@@ -2090,6 +2149,7 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         unresolved_block_refs: rendered.unresolved_block_refs,
         limits: rendered.limits,
         origin: rendered.origin,
+        hidden: rendered.hidden,
     }
 }
 

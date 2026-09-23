@@ -201,6 +201,8 @@ pub struct ToPngResult {
     pub unresolved_block_refs: Vec<uncad_model::EntityId>,
     /// See [`ToSvgResult::limits`](crate::ToSvgResult::limits).
     pub limits: crate::limits::LimitReport,
+    /// See [`ToSvgResult::hidden`](crate::ToSvgResult::hidden).
+    pub hidden: usize,
 }
 
 #[derive(Debug)]
@@ -292,6 +294,7 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
         empty_blocks: rendered.empty_blocks,
         unresolved_block_refs: rendered.unresolved_block_refs,
         limits: rendered.limits,
+        hidden: rendered.hidden,
     })
 }
 

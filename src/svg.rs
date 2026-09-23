@@ -486,6 +486,31 @@ fn arrowhead_element(
     )
 }
 
+/// Half the arm length of the cross a POINT draws, in stroke widths.
+const POINT_CROSS_ARMS: f64 = 2.0;
+
+/// The marker a POINT draws: a cross whose size is set in stroke widths, not
+/// in drawing units.
+///
+/// A POINT has no size of its own, so whatever it is drawn at is a choice.
+/// A half-unit dot is sub-pixel wherever a unit is under two pixels, so on
+/// an ordinary plan the point antialiased away to nothing. The stroke width
+/// is the one quantity here that is kept constant on the page, so the cross
+/// is written at [`POINT_CROSS_ARMS`] local units and scaled by one stroke
+/// width, through the same placeholder the strokes use: a POINT inside a
+/// scaled block comes out the same size as one outside it. Only the point
+/// itself counts towards the extent -- the cross is a page-sized
+/// decoration, and the extent must not depend on the stroke.
+fn point_cross_element(at: Point2D, color: &str, frame: Frame, scale: f64) -> String {
+    let a = POINT_CROSS_ARMS;
+    format!(
+        "<path d=\"M -{a} 0 L {a} 0 M 0 -{a} L 0 {a}\" transform=\"translate({} {}) scale({})\" fill=\"none\" stroke=\"{color}\" stroke-width=\"1\"/>",
+        frame.x(at.x),
+        frame.y(at.y),
+        stroke_width_placeholder(scale)
+    )
+}
+
 /// The arrowhead size LEADER and MULTILEADER draw at. Not read from the file:
 /// neither the geometry-only MULTILEADER shim nor LEADER's model carries an
 /// arrow size, so one fixed value keeps the two consistent.
@@ -1172,10 +1197,14 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Point(p) => {
             ctx.consider(p.position.x, p.position.y);
-            Some(format!(
-                "<circle cx=\"{}\" cy=\"{}\" r=\"0.5\" fill=\"{color}\" stroke=\"none\"/>",
-                frame.x(p.position.x),
-                frame.y(p.position.y)
+            Some(point_cross_element(
+                Point2D {
+                    x: p.position.x,
+                    y: p.position.y,
+                },
+                &color,
+                frame,
+                ctx.scale,
             ))
         }
         Entity::Solid(s) | Entity::Trace(s) => {
@@ -1842,6 +1871,26 @@ mod tests {
         let (x, y) = (a * 1.0 + c * 0.0 + e, b * 1.0 + d * 0.0 + f);
         close(x, 10.0);
         close(y, -22.0);
+    }
+
+    #[test]
+    fn a_point_is_a_cross_sized_in_stroke_widths_not_in_drawing_units() {
+        // Resolved at a stroke of 0.25 units, the arms end 2 * 0.25 = 0.5
+        // units from the point, and the cross is drawn one stroke wide.
+        let at = Point2D { x: 7.0, y: 9.0 };
+        let svg = point_cross_element(at, "#000000", Frame::default(), 1.0);
+        assert!(svg.contains("M -2 0 L 2 0 M 0 -2 L 0 2"), "{svg}");
+        assert!(svg.contains("translate(7 -9)"), "{svg}");
+        assert!(svg.contains("stroke-width=\"1\""), "{svg}");
+        let resolved = resolve_stroke_widths(&svg, 0.25);
+        assert!(resolved.contains("scale(0.25)"), "{resolved}");
+        // Inside a block scaled 4x the placeholder carries that scale, so
+        // the cross still comes out one stroke width wide on the page.
+        let nested = resolve_stroke_widths(
+            &point_cross_element(at, "#000000", Frame::default(), 4.0),
+            0.25,
+        );
+        assert!(nested.contains("scale(0.0625)"), "{nested}");
     }
 
     #[test]

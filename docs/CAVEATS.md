@@ -47,6 +47,10 @@ useful than a gap -- but a reader should know which parts are approximate:
   inside a rotated block is measured through all four corners of its box, which contains it
   under any placement but is up to a factor of sqrt 2 larger at 45 degrees.
 
+- **POINT as a cross**: a POINT has no size of its own, so it is drawn as a cross four
+  stroke widths across, whatever the drawing's units -- a half-unit dot was sub-pixel
+  wherever a unit is under two pixels. Only the point itself counts towards the extent.
+
 What the renderer cannot draw at all (a type the model has no shape for arrives as
 `Entity::Unknown`) is reported in `ToSvgResult::unsupported_types`, sorted by name. The
 one type that will stay there for good is `ACAD_PROXY_ENTITY`: an opaque per-application

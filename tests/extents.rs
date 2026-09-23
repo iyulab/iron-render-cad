@@ -13,7 +13,7 @@ use iron_render_cad::limits::Cap;
 use iron_render_cad::{to_svg, Space, ToSvgOptions};
 use uncad_model::model::{
     ArcEntity, CircleEntity, Confidence, EllipseEntity, Entity, EntityCommon, EntityId,
-    InsertEntity, Origin, Point3D, Ref,
+    InsertEntity, LineEntity, Origin, Point3D, PointEntity, Ref,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
@@ -207,4 +207,22 @@ fn a_circle_in_a_rotated_block_counts_all_of_itself() {
     assert!((max_x - min_x - 2.0 * 2f64.sqrt()).abs() < 1e-9);
     assert!(((min_x + max_x) / 2.0 - 5.0).abs() < 1e-9);
     assert!(((min_y + max_y) / 2.0 - 5.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_point_counts_itself_not_the_cross_it_is_drawn_as() {
+    // The cross is sized in stroke widths, a page quantity: were it part of
+    // the extent, the extent would depend on the stroke.
+    let entities = vec![
+        Entity::Line(LineEntity {
+            common: common(0x10),
+            start_point: xyz(0.0, 0.0, 0.0),
+            end_point: xyz(10.0, 0.0, 0.0),
+        }),
+        Entity::Point(PointEntity {
+            common: common(0x11),
+            position: xyz(10.0, 5.0, 0.0),
+        }),
+    ];
+    close(extent(entities, BTreeMap::new()), [0.0, 0.0, 10.0, 5.0]);
 }

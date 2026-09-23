@@ -31,7 +31,8 @@ use std::fmt::Write as _;
 use uncad_model::bulge::{self, Segment};
 use uncad_model::model::{
     ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, LightType,
-    LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D, PolylineVertex,
+    LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D, PolylineVertex, TextEntity,
+    TextHorizontalAlignment, TextVerticalAlignment,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase, Ocs};
@@ -527,6 +528,85 @@ fn text_element(at: Point2D, height: f64, rotation: f64, color: &str, text: &str
     )
 }
 
+/// A TEXT as a `<text>`, placed the way its alignment says.
+///
+/// Left and baseline -- or an alignment the file gives no point for -- is
+/// drawn from the start point. Otherwise the alignment point is the one the
+/// text answers to: an SVG `text-anchor` puts the text's middle or end
+/// there, and `dominant-baseline` its middle, top or bottom. `Aligned` and
+/// `Fit` run from the start point to the alignment point along the line
+/// between them, stretched to that length (`textLength`). The width factor
+/// narrows or widens the characters about the point the text is placed at.
+/// The font drawn is not the file's, so the start point the file states --
+/// computed from the file's font -- would not center a centered text; the
+/// alignment point does.
+fn aligned_text_element(t: &TextEntity, color: &str, text: &str) -> String {
+    use TextHorizontalAlignment as H;
+    use TextVerticalAlignment as V;
+    let height = t.text_height;
+    let plain = (t.horizontal_alignment, t.vertical_alignment) == (H::Left, V::Baseline);
+    let (at, mut extra, rotation) = match (t.horizontal_alignment, t.alignment_point) {
+        (_, None) => (t.start_point, String::new(), t.rotation),
+        _ if plain => (t.start_point, String::new(), t.rotation),
+        (H::Aligned | H::Fit, Some(end)) => {
+            let (dx, dy) = (end.x - t.start_point.x, end.y - t.start_point.y);
+            let length = dx.hypot(dy);
+            if length == 0.0 || !length.is_finite() {
+                (t.start_point, String::new(), t.rotation)
+            } else {
+                (
+                    t.start_point,
+                    format!(
+                        " textLength=\"{}\" lengthAdjust=\"spacingAndGlyphs\"",
+                        clean(length)
+                    ),
+                    dy.atan2(dx),
+                )
+            }
+        }
+        (h, Some(point)) => {
+            let anchor = match h {
+                H::Center | H::Middle => " text-anchor=\"middle\"",
+                H::Right => " text-anchor=\"end\"",
+                _ => "",
+            };
+            (point, anchor.to_string(), t.rotation)
+        }
+    };
+    if !plain && t.alignment_point.is_some() {
+        let baseline = match (t.horizontal_alignment, t.vertical_alignment) {
+            (H::Middle, _) | (_, V::Middle) => " dominant-baseline=\"central\"",
+            (_, V::Top) => " dominant-baseline=\"text-before-edge\"",
+            (_, V::Bottom) => " dominant-baseline=\"text-after-edge\"",
+            (_, V::Baseline) => "",
+        };
+        extra.push_str(baseline);
+    }
+    let (x, y) = (at.x, neg(at.y));
+    let mut transform = Vec::new();
+    if rotation != 0.0 {
+        transform.push(format!("rotate({} {x} {y})", neg(rotation.to_degrees())));
+    }
+    let w = t.width_factor;
+    if w != 1.0 && w.is_finite() && w > 0.0 {
+        transform.push(format!(
+            "translate({x} {y}) scale({} 1) translate({} {})",
+            clean(w),
+            neg(x),
+            neg(y)
+        ));
+    }
+    let transform = if transform.is_empty() {
+        String::new()
+    } else {
+        format!(" transform=\"{}\"", transform.join(" "))
+    };
+    format!(
+        "<text x=\"{x}\" y=\"{y}\" font-size=\"{height}\" fill=\"{color}\" stroke=\"none\"{extra}{transform}>{}</text>",
+        escape_xml(text)
+    )
+}
+
 /// Where an MTEXT block goes relative to its insertion point: the SVG
 /// `text-anchor` and the y of the first line's baseline, in SVG coordinates
 /// (y down; `y` is the insertion point's). The block is `text_height` for its
@@ -870,10 +950,11 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Text(t) => {
             ctx.consider(t.start_point.x, t.start_point.y);
-            Some(text_element(
-                t.start_point,
-                t.text_height,
-                t.rotation,
+            if let Some(a) = t.alignment_point {
+                ctx.consider(a.x, a.y);
+            }
+            Some(aligned_text_element(
+                t,
                 &color,
                 &text_codes::decode(&t.text, false),
             ))
@@ -1993,6 +2074,88 @@ mod tests {
         // From 1.0 counter-clockwise round to 0.5: a sweep of TAU - 0.5.
         let n = arc_numbers(&render_one(ellipse(1.0, 0.5)));
         assert_eq!(n[5], 1.0, "large-arc flag: {n:?}");
+    }
+
+    fn text_entity(
+        h: TextHorizontalAlignment,
+        v: TextVerticalAlignment,
+        alignment_point: Option<Point2D>,
+        width_factor: f64,
+    ) -> Entity {
+        Entity::Text(TextEntity {
+            common: plain_common(),
+            start_point: Point2D { x: 1.0, y: 2.0 },
+            text_height: 2.5,
+            text: "A-1".to_string(),
+            rotation: 0.0,
+            horizontal_alignment: h,
+            vertical_alignment: v,
+            alignment_point,
+            width_factor,
+        })
+    }
+
+    #[test]
+    fn a_left_baseline_text_is_drawn_from_its_start_point_as_before() {
+        use TextHorizontalAlignment as H;
+        use TextVerticalAlignment as V;
+        let svg = render_one(text_entity(H::Left, V::Baseline, None, 1.0));
+        assert!(
+            svg.contains(
+                "<text x=\"1\" y=\"-2\" font-size=\"2.5\" fill=\"#000000\" stroke=\"none\">A-1</text>"
+            ),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_centered_text_is_anchored_on_its_alignment_point() {
+        use TextHorizontalAlignment as H;
+        use TextVerticalAlignment as V;
+        let at = Some(Point2D { x: 10.0, y: 4.0 });
+        let svg = render_one(text_entity(H::Center, V::Middle, at, 1.0));
+        assert!(
+            svg.contains("x=\"10\" y=\"-4\"")
+                && svg.contains("text-anchor=\"middle\" dominant-baseline=\"central\""),
+            "{svg}"
+        );
+        let svg = render_one(text_entity(H::Right, V::Top, at, 1.0));
+        assert!(
+            svg.contains("text-anchor=\"end\" dominant-baseline=\"text-before-edge\""),
+            "{svg}"
+        );
+        // An alignment the file gives no point for is drawn from the start.
+        let svg = render_one(text_entity(H::Center, V::Baseline, None, 1.0));
+        assert!(
+            svg.contains("x=\"1\" y=\"-2\"") && !svg.contains("text-anchor"),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn an_aligned_text_runs_from_its_start_to_its_alignment_point() {
+        use TextHorizontalAlignment as H;
+        use TextVerticalAlignment as V;
+        // From (1, 2) to (1, 7): 5 long, straight up -- a quarter turn.
+        let at = Some(Point2D { x: 1.0, y: 7.0 });
+        let svg = render_one(text_entity(H::Aligned, V::Baseline, at, 1.0));
+        assert!(
+            svg.contains(
+                "textLength=\"5\" lengthAdjust=\"spacingAndGlyphs\" transform=\"rotate(-90 1 -2)\""
+            ),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_width_factor_narrows_the_text_about_where_it_is_placed() {
+        use TextHorizontalAlignment as H;
+        use TextVerticalAlignment as V;
+        let svg = render_one(text_entity(H::Left, V::Baseline, None, 0.8));
+        assert!(
+            svg.contains("transform=\"translate(1 -2) scale(0.8 1) translate(-1 2)\""),
+            "{svg}"
+        );
     }
 
     #[test]

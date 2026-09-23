@@ -37,6 +37,13 @@ useful than a gap -- but a reader should know which parts are approximate:
   height taken as 1.2 times the text height times the spacing factor -- an estimate, since
   real line breaks and glyph metrics depend on the font. Where the drawing does not state
   the attachment, the insertion point is used as the first line's baseline.
+- **TEXT is placed by its alignment point** when it is aligned otherwise than left and
+  baseline: centered, right-aligned or middle text is anchored there (`text-anchor`,
+  `dominant-baseline`), and aligned or fit text is stretched from its start point to it
+  (`textLength`) -- the drawn font is not the file's, so the file's start point, computed
+  from its own font, would not center it. Aligned text keeps its height rather than
+  scaling it to its proportions. The width factor scales the characters about the point
+  the text is placed at. ATTRIB alignment is not read yet.
 
 What the renderer cannot draw at all (a type the model has no shape for arrives as
 `Entity::Unknown`) is reported in `ToSvgResult::unsupported_types`, sorted by name. The

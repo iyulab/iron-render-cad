@@ -342,6 +342,45 @@ fn seen_from_above(plane: Ocs, p: Point3D) -> Point2D {
     Point2D { x: w.x, y: w.y }
 }
 
+/// Where the points of `plane` at height `elevation` land on the page: the
+/// plane taken to the world and seen from above, which drops the world z.
+/// Both steps are linear, so the whole map is one affine map -- exact for
+/// anything drawn in the plane, and degenerate (a line) only for a plane
+/// seen edge-on.
+fn plane_seen_from_above(plane: Ocs, elevation: f64) -> Affine2 {
+    let (x, y, z) = (plane.x_axis(), plane.y_axis(), plane.z_axis());
+    Affine2 {
+        a: x.x,
+        b: x.y,
+        c: y.x,
+        d: y.y,
+        e: elevation * z.x,
+        f: elevation * z.y,
+    }
+}
+
+/// What `draw` emits in the coordinates `view` takes to the current ones,
+/// wrapped in a group that applies it. Bounds are recorded through `view`
+/// as well, the way a block reference records its contents'.
+fn in_view(
+    view: Affine2,
+    ctx: &mut Ctx,
+    draw: impl FnOnce(&mut Ctx) -> Option<String>,
+) -> Option<String> {
+    let parent = ctx.transform;
+    ctx.transform = view.then(&parent);
+    let body = draw(ctx);
+    ctx.transform = parent;
+    let [a, b, c, d, e, f] = svg_matrix(&view);
+    body.map(|body| {
+        format!(
+            "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\">
+  {body}
+</g>"
+        )
+    })
+}
+
 /// A CIRCLE whose extrusion is not the world Z axis. Facing down (a mirror
 /// copy) it is still a circle, at its center taken to the world; on a tilted
 /// plane it is seen from above, so it is drawn through points of its outline.
@@ -1248,7 +1287,20 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         Entity::PolylinePFace(p) => {
             render_wireframe_entity(&p.wireframe_edges, "POLYLINE_PFACE", &color, ctx)
         }
-        Entity::Hatch(h) => hatch::render_hatch(h, &color, ctx),
+        Entity::Hatch(h) => {
+            let plane = own_plane(h.extrusion);
+            if plane.is_world() {
+                hatch::render_hatch(h, &color, ctx)
+            } else {
+                // Everything a HATCH states -- boundary, pattern lines,
+                // gradient -- is in its own plane, and that plane seen from
+                // above is an affine map of the page: drawn in the plane and
+                // placed by it, the whole fill stays exact.
+                in_view(plane_seen_from_above(plane, h.elevation), ctx, |ctx| {
+                    hatch::render_hatch(h, &color, ctx)
+                })
+            }
+        }
         Entity::Leader(l) => {
             if l.vertices.is_empty() {
                 return None;
@@ -1844,6 +1896,72 @@ mod tests {
         }));
         // 1-2-4-3, each x reversed; the page flips y.
         assert!(svg.contains("points=\"1,0 3,0 3,-2 1,-2\""), "{svg}");
+    }
+
+    fn square_hatch(elevation: f64, extrusion: Point3D) -> Entity {
+        use uncad_model::model::{HatchBoundaryPath, HatchEntity};
+        Entity::Hatch(HatchEntity {
+            common: plain_common(),
+            boundary_paths: vec![HatchBoundaryPath::Polyline(
+                [(1.0, 0.0), (3.0, 0.0), (3.0, 2.0), (1.0, 2.0)]
+                    .iter()
+                    .map(|&(x, y)| PolylineVertex::straight(Point2D { x, y }))
+                    .collect(),
+            )],
+            solid_fill: true,
+            gradient: None,
+            pattern_lines: Vec::new(),
+            elevation,
+            extrusion,
+        })
+    }
+
+    #[test]
+    fn a_mirrored_hatch_is_drawn_in_its_plane_and_placed_by_it() {
+        let svg = render_one(square_hatch(5.0, mirrored()));
+        // The boundary as the file wrote it, inside the mirror (world x
+        // reversed; the page flips y, which leaves a mirror in x as it is).
+        assert!(
+            svg.contains("<g transform=\"matrix(-1 0 0 1 0 0)\">"),
+            "{svg}"
+        );
+        assert!(svg.contains("M 1 0 L 3 0 L 3 -2 L 1 -2 Z"), "{svg}");
+        // The extent is the world's, x from -3 to -1: the view is centred
+        // on -2, not on the 2 the unmirrored boundary would give.
+        let [x, _, w, _] = view_box(&svg);
+        close(x + w / 2.0, -2.0);
+    }
+
+    #[test]
+    fn a_hatch_on_a_tilted_plane_is_seen_from_above() {
+        // Tilted 45 degrees about the world x axis: the arbitrary axis
+        // algorithm keeps x, and y is foreshortened by cos 45.
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let svg = render_one(square_hatch(
+            0.0,
+            Point3D {
+                x: 0.0,
+                y: -h,
+                z: h,
+            },
+        ));
+        assert!(svg.contains("<g transform=\"matrix(1 "), "{svg}");
+        let [_, _, w, height] = view_box(&svg);
+        // Width 2 and height 2 cos 45, each with the same padding.
+        close(w - height, 2.0 - 2.0 * h);
+    }
+
+    #[test]
+    fn a_hatch_in_the_world_plane_is_not_wrapped() {
+        let svg = render_one(square_hatch(
+            0.0,
+            Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+        ));
+        assert!(!svg.contains("<g transform"), "{svg}");
     }
 
     fn face(invisible_edges: [bool; 4]) -> Entity {

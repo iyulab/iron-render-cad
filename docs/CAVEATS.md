@@ -16,7 +16,7 @@ useful than a gap -- but a reader should know which parts are approximate:
   by fit points only is drawn through its fit points. A spline whose knots or weights do
   not add up to a definition is drawn as its control polygon, which does not lie on the
   curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs, and so is a bulged segment of an
-  LWPOLYLINE or 2D POLYLINE; a mirrored ellipse -- normal (0, 0, -1) -- runs the other way. An ELLIPSE on a tilted plane is drawn through 64 points
+  LWPOLYLINE or 2D POLYLINE; a mirrored ellipse -- normal (0, 0, -1) -- runs the other way, and a mirrored CIRCLE or ARC -- written in its own coordinate system, extrusion (0, 0, -1) -- is taken to the world through the format's arbitrary axis algorithm and is still exact. A CIRCLE or ARC on a tilted plane is drawn through 64 points per turn of its outline seen from above. An ELLIPSE on a tilted plane is drawn through 64 points
   of its outline seen from above.)
 - **3DSOLID / REGION / POLYLINE_PFACE as isometric wireframes**: the model carries a
   solid's edges only; the renderer projects them isometrically and draws the lines.

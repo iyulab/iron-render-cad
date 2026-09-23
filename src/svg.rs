@@ -21,6 +21,7 @@ mod bounds;
 mod bulge;
 mod format;
 mod hatch;
+mod ocs;
 mod spline;
 mod text_codes;
 
@@ -30,8 +31,8 @@ use format::{clean, escape_xml, neg, points_attr, rotate_transform_attr, xy};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
-    EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex, MTextAttachment,
-    Point2D, Point3D, PolylineVertex,
+    ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex,
+    MTextAttachment, Point2D, Point3D, PolylineVertex,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
@@ -324,6 +325,99 @@ fn polyline_element(pts: &[Point2D], closed: bool, color: &str) -> String {
     )
 }
 
+/// Points sampled around a full turn of a circle drawn in a plane that is
+/// not the world's, seen from above.
+const OWN_PLANE_SAMPLES: usize = 64;
+
+/// The coordinate system a CIRCLE or ARC is written in. An extrusion that
+/// names no plane (zero, or not finite) is drawn in the world's.
+fn own_plane(extrusion: Point3D) -> ocs::Ocs {
+    ocs::Ocs::of(extrusion)
+        .or_else(|| {
+            ocs::Ocs::of(Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            })
+        })
+        .expect("the world Z axis names a plane")
+}
+
+/// A CIRCLE whose extrusion is not the world Z axis. Facing down (a mirror
+/// copy) it is still a circle, at its center taken to the world; on a tilted
+/// plane it is seen from above, so it is drawn through points of its outline.
+fn circle_in_own_plane(c: &CircleEntity, color: &str, ctx: &mut Ctx) -> String {
+    let plane = own_plane(c.extrusion);
+    if plane.flat() {
+        let center = plane.to_world_xy(c.center);
+        ctx.consider(center.x - c.radius, center.y - c.radius);
+        ctx.consider(center.x + c.radius, center.y + c.radius);
+        return format!(
+            "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
+            clean(center.x),
+            neg(center.y),
+            c.radius
+        );
+    }
+    let points: Vec<Point2D> = (0..OWN_PLANE_SAMPLES)
+        .map(|i| {
+            let a = std::f64::consts::TAU * i as f64 / OWN_PLANE_SAMPLES as f64;
+            plane.to_world_xy(on_circle(c.center, c.radius, a))
+        })
+        .collect();
+    ctx.consider_all(&points);
+    polyline_element(&points, true, color)
+}
+
+/// An ARC whose extrusion is not the world Z axis. Its angles run
+/// counter-clockwise about the extrusion, so facing down (a mirror copy) it
+/// runs clockwise in the world; on a tilted plane it is seen from above and
+/// drawn through points of its outline.
+fn arc_in_own_plane(a: &ArcEntity, color: &str, ctx: &mut Ctx) -> String {
+    let plane = own_plane(a.extrusion);
+    let mut sweep = a.end_angle - a.start_angle;
+    if sweep < 0.0 {
+        sweep += std::f64::consts::TAU;
+    }
+    let start = plane.to_world_xy(on_circle(a.center, a.radius, a.start_angle));
+    let end = plane.to_world_xy(on_circle(a.center, a.radius, a.end_angle));
+    if plane.flat() {
+        let center = plane.to_world_xy(a.center);
+        ctx.consider(center.x - a.radius, center.y - a.radius);
+        ctx.consider(center.x + a.radius, center.y + a.radius);
+        let r = a.radius;
+        let large = u8::from(sweep > std::f64::consts::PI);
+        // Clockwise in the world, which the page's flipped y axis turns
+        // counter-clockwise: SVG's sweep flag 1.
+        return format!(
+            "<path d=\"M {} {} A {r} {r} 0 {large} 1 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+            clean(start.x),
+            neg(start.y),
+            clean(end.x),
+            neg(end.y)
+        );
+    }
+    let steps = ((OWN_PLANE_SAMPLES as f64 * sweep / std::f64::consts::TAU).ceil() as usize).max(2);
+    let points: Vec<Point2D> = (0..=steps)
+        .map(|i| {
+            let t = a.start_angle + sweep * i as f64 / steps as f64;
+            plane.to_world_xy(on_circle(a.center, a.radius, t))
+        })
+        .collect();
+    ctx.consider_all(&points);
+    polyline_element(&points, false, color)
+}
+
+/// The point at `angle` on the circle of `radius` about `center`, in the
+/// circle's own coordinate system.
+fn on_circle(center: Point3D, radius: f64, angle: f64) -> Point3D {
+    Point3D {
+        x: center.x + radius * angle.cos(),
+        y: center.y + radius * angle.sin(),
+        z: center.z,
+    }
+}
+
 /// A polyline with arc segments, as a `<path>`: a straight segment is a line,
 /// a bulged one an exact SVG arc. The arcs' extreme points join the bounds,
 /// since an arc reaches past its two ends.
@@ -606,6 +700,12 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 l.end_point.x,
                 neg(l.end_point.y)
             ))
+        }
+        Entity::Circle(c) if !own_plane(c.extrusion).is_world() => {
+            Some(circle_in_own_plane(c, &color, ctx))
+        }
+        Entity::Arc(a) if !own_plane(a.extrusion).is_world() => {
+            Some(arc_in_own_plane(a, &color, ctx))
         }
         Entity::Circle(c) => {
             ctx.consider(c.center.x - c.radius, c.center.y - c.radius);
@@ -1482,6 +1582,98 @@ mod tests {
         assert_eq!(names, ["M", "L", "L", "A", "Z"], "{svg}");
         // The closing arc ends where the polyline began.
         assert_eq!(cmds[3].1[5..], [0.0, 0.0], "{svg}");
+    }
+
+    fn mirrored() -> Point3D {
+        Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: -1.0,
+        }
+    }
+
+    #[test]
+    fn a_mirrored_circle_is_drawn_at_its_center_taken_to_the_world() {
+        let svg = render_one(Entity::Circle(CircleEntity {
+            common: plain_common(),
+            center: Point3D {
+                x: -170.0,
+                y: -50.0,
+                z: 0.0,
+            },
+            radius: 3.0,
+            extrusion: mirrored(),
+        }));
+        assert!(
+            svg.contains("<circle cx=\"170\" cy=\"50\" r=\"3\""),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_mirrored_arc_runs_clockwise_in_the_world() {
+        // Written about (-110, -50) from 30 to 150 degrees, counter-clockwise
+        // about (0, 0, -1): in the world it is about (110, -50), from
+        // (106.54, -48) over the top to (113.46, -48) -- clockwise.
+        let svg = render_one(Entity::Arc(ArcEntity {
+            common: plain_common(),
+            center: Point3D {
+                x: -110.0,
+                y: -50.0,
+                z: 0.0,
+            },
+            radius: 4.0,
+            start_angle: 30f64.to_radians(),
+            end_angle: 150f64.to_radians(),
+            extrusion: mirrored(),
+        }));
+        let cmds = path_commands(&svg);
+        let (m, a) = (&cmds[0].1, &cmds[1].1);
+        let near = |p: f64, q: f64| (p - q).abs() < 1e-9;
+        assert!(
+            near(m[0], 110.0 - 12f64.sqrt()) && near(m[1], 48.0),
+            "{svg}"
+        );
+        // r r rotation large sweep x y: the page's sweep flag 1.
+        assert_eq!(a[..5], [4.0, 4.0, 0.0, 0.0, 1.0], "{svg}");
+        assert!(
+            near(a[5], 110.0 + 12f64.sqrt()) && near(a[6], 48.0),
+            "{svg}"
+        );
+    }
+
+    #[test]
+    fn a_circle_on_a_tilted_plane_is_drawn_as_seen_from_above() {
+        // Extrusion along the world X axis: the circle stands on edge, and
+        // from above it is a line along the world y axis through (0, 2).
+        let svg = render_one(Entity::Circle(CircleEntity {
+            common: plain_common(),
+            center: Point3D {
+                x: 2.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            radius: 1.0,
+            extrusion: Point3D {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        }));
+        assert!(svg.contains("<polygon"), "{svg}");
+        let points = svg
+            .split("points=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        for pair in points.split_whitespace() {
+            let (x, y) = pair.split_once(',').unwrap();
+            let (x, y): (f64, f64) = (x.parse().unwrap(), y.parse().unwrap());
+            assert!(x.abs() < 1e-9, "{pair}");
+            assert!((-y - 2.0).abs() <= 1.0 + 1e-9, "{pair}");
+        }
     }
 
     fn leader(has_arrowhead: Option<bool>) -> Entity {

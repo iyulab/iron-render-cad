@@ -18,18 +18,21 @@
 //! and [`bounds`] (viewBox and outlier trim).
 
 mod bounds;
+mod bulge;
 mod format;
 mod hatch;
 mod spline;
 
 use crate::color::{resolve_color, DEFAULT_COLOR};
 use bounds::{dominant_cluster_box, Box2D};
-use format::{escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy};
+use format::{
+    clean, escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy,
+};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
     EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex, MTextAttachment,
-    Point2D, Point3D,
+    Point2D, Point3D, PolylineVertex,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
@@ -320,6 +323,46 @@ fn polyline_element(pts: &[Point2D], closed: bool, color: &str) -> String {
         "<{tag} points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
         points_attr(pts)
     )
+}
+
+/// A polyline with arc segments, as a `<path>`: a straight segment is a line,
+/// a bulged one an exact SVG arc. The arcs' extreme points join the bounds,
+/// since an arc reaches past its two ends.
+fn bulged_polyline_element(
+    vertices: &[PolylineVertex],
+    closed: bool,
+    color: &str,
+    ctx: &mut Ctx,
+) -> String {
+    let first = vertices[0].point;
+    let mut d = format!("M {} {}", clean(first.x), neg(first.y));
+    for (_, to, arc) in bulge::segments(vertices, closed) {
+        match arc {
+            Some(arc) => {
+                for e in arc.extremes() {
+                    ctx.consider(e.x, e.y);
+                }
+                let r = clean(arc.radius);
+                let large = u8::from(arc.sweep.abs() > std::f64::consts::PI);
+                // The y axis is flipped on the way out, which turns a
+                // counter-clockwise arc into a clockwise one on the page.
+                let sweep = u8::from(arc.sweep < 0.0);
+                let _ = write!(
+                    d,
+                    " A {r} {r} 0 {large} {sweep} {} {}",
+                    clean(to.x),
+                    neg(to.y)
+                );
+            }
+            None => {
+                let _ = write!(d, " L {} {}", clean(to.x), neg(to.y));
+            }
+        }
+    }
+    if closed {
+        d.push_str(" Z");
+    }
+    format!("<path d=\"{d}\" fill=\"none\" stroke=\"{color}\"/>")
 }
 
 /// A dashed outline, used for the shapes this renderer draws as an indication
@@ -644,10 +687,12 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            // TODO(bulge): arc segments are still drawn as their chords.
             let points: Vec<Point2D> = p.vertices.iter().map(|v| v.point).collect();
             ctx.consider_all(&points);
-            Some(polyline_element(&points, p.closed, &color))
+            if p.vertices.iter().all(|v| v.bulge == 0.0) {
+                return Some(polyline_element(&points, p.closed, &color));
+            }
+            Some(bulged_polyline_element(&p.vertices, p.closed, &color, ctx))
         }
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {
@@ -1345,6 +1390,99 @@ mod tests {
             true_color: None,
             invisible: false,
         }
+    }
+
+    fn polyline(vertices: &[(f64, f64, f64)], closed: bool) -> Entity {
+        use uncad_model::model::LwPolylineEntity;
+        Entity::LwPolyline(LwPolylineEntity {
+            common: plain_common(),
+            vertices: vertices
+                .iter()
+                .map(|&(x, y, bulge)| PolylineVertex {
+                    point: Point2D { x, y },
+                    bulge,
+                })
+                .collect(),
+            closed,
+        })
+    }
+
+    /// The path's commands, each with its numbers.
+    fn path_commands(svg: &str) -> Vec<(String, Vec<f64>)> {
+        let d = svg
+            .split("d=\"")
+            .nth(1)
+            .expect("a path")
+            .split('"')
+            .next()
+            .unwrap();
+        let mut out: Vec<(String, Vec<f64>)> = Vec::new();
+        for t in d.split_whitespace() {
+            match t.parse::<f64>() {
+                Ok(n) => out.last_mut().expect("a command first").1.push(n),
+                Err(_) => out.push((t.to_string(), Vec::new())),
+            }
+        }
+        out
+    }
+
+    fn view_box(svg: &str) -> [f64; 4] {
+        let v: Vec<f64> = svg
+            .split("viewBox=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .map(|t| t.parse().unwrap())
+            .collect();
+        [v[0], v[1], v[2], v[3]]
+    }
+
+    #[test]
+    fn a_straight_polyline_is_still_a_polyline() {
+        let svg = render_one(polyline(&[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0)], false));
+        assert!(svg.contains("<polyline") && !svg.contains("<path"), "{svg}");
+    }
+
+    #[test]
+    fn a_bulged_segment_is_an_exact_arc_turning_the_way_the_bulge_says() {
+        // Bulge 1 from (0, 0) to (2, 0): a half circle of radius 1,
+        // counter-clockwise in the drawing -- which the page's flipped y axis
+        // turns clockwise, so SVG's sweep flag is 0. Bulge -1 is the mirror.
+        for (bulge, sweep) in [(1.0, 0.0), (-1.0, 1.0)] {
+            let svg = render_one(polyline(&[(0.0, 0.0, bulge), (2.0, 0.0, 0.0)], false));
+            let cmds = path_commands(&svg);
+            assert_eq!(cmds[0], ("M".to_string(), vec![0.0, 0.0]), "{svg}");
+            assert_eq!(
+                cmds[1],
+                ("A".to_string(), vec![1.0, 1.0, 0.0, 0.0, sweep, 2.0, 0.0]),
+                "{svg}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_view_box_reaches_the_arc_not_just_its_ends() {
+        // The half circle below the chord reaches y = -1 in the drawing, y = 1
+        // on the page; a view box of the two ends alone would be flat.
+        let svg = render_one(polyline(&[(0.0, 0.0, 1.0), (2.0, 0.0, 0.0)], false));
+        let [_, y, _, h] = view_box(&svg);
+        assert!(y <= 0.0 && y + h >= 1.0, "{svg}");
+    }
+
+    #[test]
+    fn a_closed_polyline_draws_its_last_bulge_back_to_the_first_vertex() {
+        let svg = render_one(polyline(
+            &[(0.0, 0.0, 0.0), (2.0, 0.0, 0.0), (2.0, 2.0, -1.0)],
+            true,
+        ));
+        let cmds = path_commands(&svg);
+        let names: Vec<&str> = cmds.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(names, ["M", "L", "L", "A", "Z"], "{svg}");
+        // The closing arc ends where the polyline began.
+        assert_eq!(cmds[3].1[5..], [0.0, 0.0], "{svg}");
     }
 
     fn leader(has_arrowhead: Option<bool>) -> Entity {

@@ -2,11 +2,12 @@
 //! tiled through SVG's own `<pattern>` element.
 
 use super::format::{clean, neg};
-use super::Ctx;
+use super::{bulge, Ctx};
 use crate::color::{tint_toward_white, true_color_to_hex, DEFAULT_COLOR};
 use std::fmt::Write as _;
 use uncad_model::model::{
     HatchBoundaryPath, HatchEdge, HatchEntity, HatchGradient, HatchPatternLine, Point2D,
+    PolylineVertex,
 };
 
 /// Renders one HATCH: always an outline of its boundary paths, plus -- in
@@ -20,8 +21,7 @@ pub(super) fn render_hatch(h: &HatchEntity, color: &str, ctx: &mut Ctx) -> Optio
     let mut subpaths = Vec::new();
     for path in &h.boundary_paths {
         let pts: Vec<Point2D> = match path {
-            // TODO(bulge): arc segments are still drawn as their chords.
-            HatchBoundaryPath::Polyline(vertices) => vertices.iter().map(|v| v.point).collect(),
+            HatchBoundaryPath::Polyline(vertices) => polyline_path_points(vertices),
             HatchBoundaryPath::Edges(edges) => edges.iter().flat_map(edge_points).collect(),
         };
         if pts.len() < 2 {
@@ -82,6 +82,27 @@ fn arc_sweep(start_angle: f64, end_angle: f64, is_ccw: bool) -> f64 {
         sweep -= 2.0 * std::f64::consts::PI;
     }
     sweep
+}
+
+/// A polyline boundary's points, its bulged segments chord-approximated the
+/// way an arc edge is ([`edge_points`]). A polyline path is a closed loop, so
+/// the last vertex's bulge is the segment back to the first.
+fn polyline_path_points(vertices: &[PolylineVertex]) -> Vec<Point2D> {
+    let mut points = Vec::new();
+    for (from, _, arc) in bulge::segments(vertices, true) {
+        points.push(from);
+        if let Some(arc) = arc {
+            let segments = 12;
+            points.extend((1..segments).map(|i| {
+                arc.at(arc.start_angle + arc.sweep * (f64::from(i) / f64::from(segments)))
+            }));
+        }
+    }
+    if points.is_empty() {
+        // A single vertex has no segment; keep it, as the path always did.
+        points.extend(vertices.iter().map(|v| v.point));
+    }
+    points
 }
 
 /// Chord-approximates one boundary edge, in the same spirit as SPLINE and
@@ -283,6 +304,28 @@ mod tests {
         close(arc_sweep(pi / 2.0, 0.0, true), 1.5 * pi);
         close(arc_sweep(0.0, pi / 2.0, false), -1.5 * pi);
         close(arc_sweep(pi / 2.0, 0.0, false), -pi / 2.0);
+    }
+
+    #[test]
+    fn a_polyline_boundarys_bulged_segment_is_sampled_on_its_arc_including_the_closing_one() {
+        let v = |x, y, bulge| PolylineVertex {
+            point: Point2D { x, y },
+            bulge,
+        };
+        // A square whose last segment, back to the first vertex, bows out.
+        let pts = polyline_path_points(&[
+            v(0.0, 0.0, 0.0),
+            v(2.0, 0.0, 0.0),
+            v(2.0, 2.0, 0.0),
+            v(0.0, 2.0, 1.0),
+        ]);
+        assert_eq!(pts.len(), 4 + 11);
+        // Bulge 1 from (0, 2) to (0, 0) is a half circle around (0, 1) on
+        // the right of that direction -- outside the square, at x <= 0.
+        for p in &pts[4..] {
+            assert!(((p.x).hypot(p.y - 1.0) - 1.0).abs() < 1e-12, "{p:?}");
+            assert!(p.x < 0.0, "{p:?}");
+        }
     }
 
     #[test]

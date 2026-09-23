@@ -644,8 +644,10 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            ctx.consider_all(&p.vertices);
-            Some(polyline_element(&p.vertices, p.closed, &color))
+            // TODO(bulge): arc segments are still drawn as their chords.
+            let points: Vec<Point2D> = p.vertices.iter().map(|v| v.point).collect();
+            ctx.consider_all(&points);
+            Some(polyline_element(&points, p.closed, &color))
         }
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {

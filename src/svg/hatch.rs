@@ -20,7 +20,8 @@ pub(super) fn render_hatch(h: &HatchEntity, color: &str, ctx: &mut Ctx) -> Optio
     let mut subpaths = Vec::new();
     for path in &h.boundary_paths {
         let pts: Vec<Point2D> = match path {
-            HatchBoundaryPath::Polyline(vertices) => vertices.clone(),
+            // TODO(bulge): arc segments are still drawn as their chords.
+            HatchBoundaryPath::Polyline(vertices) => vertices.iter().map(|v| v.point).collect(),
             HatchBoundaryPath::Edges(edges) => edges.iter().flat_map(edge_points).collect(),
         };
         if pts.len() < 2 {

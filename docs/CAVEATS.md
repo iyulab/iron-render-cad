@@ -96,6 +96,12 @@ useful than a gap -- but a reader should know which parts are approximate:
   inside a rotated block is measured through all four corners of its box, which contains it
   under any placement but is up to a factor of sqrt 2 larger at 45 degrees.
 
+- **MLINE as its offset lines**: one polyline per line its MLINESTYLE defines, each offset
+  from the centreline by the style's offset times the MLINE's own scale (DXF 40), all in the
+  MLINE's colour; the lines are what count towards the extent. A model not given the scale
+  draws the style's offsets as they are, and an MLINE whose style the model does not hold is
+  drawn as its centreline.
+
 - **POINT as a cross**: a POINT has no size of its own, so it is drawn as a cross four
   stroke widths across, whatever the drawing's units -- a half-unit dot was sub-pixel
   wherever a unit is under two pixels. Only the point itself counts towards the extent.

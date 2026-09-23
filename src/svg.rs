@@ -1137,10 +1137,12 @@ fn numbers_are_real(e: &Entity) -> bool {
         }),
         Entity::Leader(l) => l.vertices.iter().all(p3),
         Entity::MultiLeader(m) => m.lines.iter().flatten().all(p3),
-        Entity::MLine(l) => l
-            .vertices
-            .iter()
-            .all(|v| p3(&v.point) && p3(&v.miter_direction)),
+        Entity::MLine(l) => {
+            l.vertices
+                .iter()
+                .all(|v| p3(&v.point) && p3(&v.miter_direction))
+                && l.scale.is_none_or(f64::is_finite)
+        }
         Entity::Light(l) => p3(&l.position) && p3(&l.target),
         Entity::Dimension(_) | Entity::Attdef(_) | Entity::Unknown { .. } => true,
     }
@@ -1798,15 +1800,20 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 Some(offsets) if !offsets.is_empty() => offsets.clone(),
                 _ => vec![0.0],
             };
+            // The style's offsets are in the style's units; the MLINE's own
+            // scale (DXF 40) is what puts them in drawing units -- a wall
+            // 200 thick is the +-0.5 STANDARD style at scale 200. A model
+            // not given the scale draws the style's own offsets: the
+            // renderer's choice, the model states none.
+            let scale = l.scale.unwrap_or(1.0);
             let lines: Vec<String> = offsets
                 .iter()
                 .map(|&offset| {
-                    polyline_element(
-                        &mline_offset_points(&l.vertices, offset),
-                        l.closed,
-                        &color,
-                        frame,
-                    )
+                    let points = mline_offset_points(&l.vertices, offset * scale);
+                    // The offset lines are what is drawn, so they are what
+                    // the extent covers, not the centerline alone.
+                    ctx.consider_all(&points);
+                    polyline_element(&points, l.closed, &color, frame)
                 })
                 .collect();
             Some(lines.join("\n  "))

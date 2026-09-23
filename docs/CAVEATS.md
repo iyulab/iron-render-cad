@@ -104,6 +104,10 @@ comes from the drawing's own coordinates. Neither side may exceed `ToPngOptions:
 cannot fail gracefully -- a request the allocator refuses aborts the process. One corrupt
 LibreDWG corpus file (`example_2000.dwg`) asked for 36 TB this way.
 
+The rasterizer itself can panic: tiny-skia asserts instead of returning an error when a
+path's coordinates overflow its fixed-point scan converter. The panic is caught and returned
+as `PngError::RenderPanic` with its message; no image is produced for that call.
+
 ## Fonts
 
 PNG rasterization loads the host's installed system fonts on every call and bundles none

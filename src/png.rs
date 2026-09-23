@@ -74,6 +74,13 @@ pub enum PngError {
     /// doesn't need its own direct dependency on the `png` crate (tiny-skia
     /// doesn't re-export it) just to name the error type.
     Encode(String),
+    /// The rasterizer panicked. tiny-skia asserts, rather than returning an
+    /// error, when a path's coordinates overflow its fixed-point scan
+    /// converter -- a line a million units long in a drawing a few
+    /// thousandths of a unit across is enough. The panic is caught and
+    /// returned here with its own message, so a caller gets an error
+    /// instead of a dead process.
+    RenderPanic(String),
 }
 
 impl std::fmt::Display for PngError {
@@ -90,6 +97,7 @@ impl std::fmt::Display for PngError {
                 "render size {width}x{height} px exceeds the {max_edge} px limit (use a smaller scale, or raise max_edge)"
             ),
             PngError::Encode(e) => write!(f, "PNG encoding failed: {e}"),
+            PngError::RenderPanic(e) => write!(f, "the rasterizer panicked: {e}"),
         }
     }
 }
@@ -154,15 +162,34 @@ fn rasterize(svg: &str, scale: f32, max_edge: u32) -> Result<Vec<u8>, PngError> 
     }
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(PngError::EmptyCanvas)?;
 
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
+    catch_panic(|| {
+        resvg::render(
+            &tree,
+            tiny_skia::Transform::from_scale(scale, scale),
+            &mut pixmap.as_mut(),
+        )
+    })?;
 
     pixmap
         .encode_png()
         .map_err(|e| PngError::Encode(e.to_string()))
+}
+
+/// Runs `render` and turns a panic inside it into [`PngError::RenderPanic`]
+/// carrying the panic's own message.
+///
+/// Asserting unwind safety is sound because nothing `render` touched is
+/// used after a panic: the pixmap it drew into is dropped unread and the
+/// error is returned instead.
+fn catch_panic(render: impl FnOnce()) -> Result<(), PngError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(render)).map_err(|payload| {
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "no message".to_string());
+        PngError::RenderPanic(message)
+    })
 }
 
 #[cfg(test)]
@@ -263,6 +290,34 @@ mod tests {
             ..options
         };
         assert!(to_png(&db, small).is_ok());
+    }
+
+    #[test]
+    fn a_panic_while_drawing_comes_back_as_an_error_with_its_message() {
+        let err = catch_panic(|| panic!("edges out of order")).unwrap_err();
+        assert!(
+            matches!(&err, PngError::RenderPanic(m) if m == "edges out of order"),
+            "{err:?}"
+        );
+        let err = catch_panic(|| panic!("{} edges", 3)).unwrap_err();
+        assert!(matches!(&err, PngError::RenderPanic(m) if m == "3 edges"));
+        assert!(catch_panic(|| {}).is_ok());
+    }
+
+    #[test]
+    fn a_document_the_rasterizer_cannot_scan_convert_still_returns() {
+        // A line a million units long in a picture 0.002 units across,
+        // drawn at 1568 px: 8e11 px of line. tiny-skia 0.12 panics inside
+        // its scan converter on this. Whether a later version does is its
+        // business -- what is asserted is only that the call *returns*,
+        // with an image or with the error, and never takes the process.
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="-0.001 -0.001 0.002 0.002" stroke="black" stroke-width="0.00001"><line x1="-1000000" y1="0" x2="1000000" y2="0.0005" stroke-dasharray="4,2"/><line x1="0" y1="-1000000" x2="0.0003" y2="1000000"/></svg>"#;
+        let result = svg_to_png(svg, 784_000.0);
+        assert!(
+            matches!(result, Ok(_) | Err(PngError::RenderPanic(_))),
+            "{:?}",
+            result.map(|png| png.len())
+        );
     }
 
     #[test]

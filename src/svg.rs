@@ -28,7 +28,9 @@ use crate::limits::{
     MAX_SVG_BODY_BYTES,
 };
 use bounds::{dominant_cluster_box, Box2D};
-use format::{escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy};
+use format::{
+    clean, escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy,
+};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -599,6 +601,15 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             .note(Cap::EntityPoints, e.common().id, e.type_name());
         return None;
     }
+    // A coordinate that is not a number names no place: nothing drawn from
+    // it would be where the file meant, and `NaN`/`inf` are not in SVG's
+    // `<number>` grammar at all. The entity is left out and counted.
+    if !numbers_are_real(e) {
+        ctx.limits.unreadable_entities += 1;
+        ctx.limits
+            .note(Cap::NotANumber, e.common().id, e.type_name());
+        return None;
+    }
     let before = ctx.emitted;
     let svg = draw_entity(e, ctx);
     // The string handed back contains everything the children below this
@@ -664,6 +675,92 @@ fn drawn_point_count(e: &Entity, tables: &Tables) -> usize {
     }
 }
 
+/// Whether every number the renderer draws this entity from is a real
+/// number (not `NaN`, not infinite). A block reference's own placement is
+/// checked here; what its block holds is checked entity by entity as it is
+/// drawn. Values the renderer does not draw from (a 3D point's `z` in plan
+/// view, a spline's knots, which fall back to the control polygon when they
+/// do not define a curve) are not screened.
+fn numbers_are_real(e: &Entity) -> bool {
+    fn real(values: &[f64]) -> bool {
+        values.iter().all(|v| v.is_finite())
+    }
+    fn p2(p: &Point2D) -> bool {
+        real(&[p.x, p.y])
+    }
+    fn p3(p: &Point3D) -> bool {
+        real(&[p.x, p.y])
+    }
+    fn xyz(p: &Point3D) -> bool {
+        real(&[p.x, p.y, p.z])
+    }
+    match e {
+        Entity::Line(l) => p3(&l.start_point) && p3(&l.end_point),
+        Entity::Circle(c) => p3(&c.center) && real(&[c.radius]),
+        Entity::Arc(a) => p3(&a.center) && real(&[a.radius, a.start_angle, a.end_angle]),
+        Entity::Ellipse(el) => {
+            p3(&el.center)
+                && xyz(&el.major_axis_endpoint)
+                && xyz(&el.extrusion)
+                && real(&[el.axis_ratio, el.start_angle, el.end_angle])
+        }
+        Entity::LwPolyline(p) | Entity::Polyline2D(p) => p.vertices.iter().all(p2),
+        Entity::Polyline3D(p) => p.vertices.iter().all(p3),
+        Entity::Text(t) => p2(&t.start_point) && real(&[t.text_height, t.rotation]),
+        Entity::Attrib(a) => p2(&a.start_point) && real(&[a.text_height, a.rotation]),
+        Entity::Tolerance(t) => {
+            p3(&t.insertion_point) && t.text_height.is_none_or(|h| h.is_finite())
+        }
+        Entity::MText(m) => {
+            p3(&m.insertion_point) && real(&[m.text_height, m.rotation, m.line_spacing_factor])
+        }
+        Entity::Point(p) => p3(&p.position),
+        Entity::Solid(s) | Entity::Trace(s) => {
+            [s.corner1, s.corner2, s.corner3, s.corner4].iter().all(p2)
+        }
+        Entity::Face3D(f) => [f.corner1, f.corner2, f.corner3, f.corner4].iter().all(p3),
+        Entity::Ray(r) | Entity::XLine(r) => p3(&r.point) && p3(&r.vector),
+        Entity::Insert(i) => p3(&i.insertion_point) && real(&[i.scale.x, i.scale.y, i.rotation]),
+        Entity::AcadTable(a) => p3(&a.insertion_point) && real(&[a.scale.x, a.scale.y, a.rotation]),
+        Entity::Viewport(v) => p3(&v.center) && real(&[v.width, v.height]),
+        Entity::Wipeout(w) => w.boundary.iter().all(p2),
+        Entity::Spline(s) => s.fit_points.iter().all(p3) && s.control_points.iter().all(p3),
+        Entity::Solid3D(s) | Entity::Region(s) | Entity::PolylinePFace(s) => {
+            s.wireframe_edges.iter().all(|[a, b]| xyz(a) && xyz(b))
+        }
+        Entity::Hatch(h) => h.boundary_paths.iter().all(|path| match path {
+            HatchBoundaryPath::Polyline(v) => v.iter().all(p2),
+            HatchBoundaryPath::Edges(edges) => edges.iter().all(|edge| match edge {
+                HatchEdge::Line { start } => p2(start),
+                HatchEdge::Arc {
+                    center,
+                    radius,
+                    start_angle,
+                    end_angle,
+                    ..
+                } => p2(center) && real(&[*radius, *start_angle, *end_angle]),
+                HatchEdge::Ellipse {
+                    center,
+                    end,
+                    minor_major_ratio,
+                    start_angle,
+                    end_angle,
+                    ..
+                } => p2(center) && p2(end) && real(&[*minor_major_ratio, *start_angle, *end_angle]),
+                HatchEdge::Spline { control_points } => control_points.iter().all(p2),
+            }),
+        }),
+        Entity::Leader(l) => l.vertices.iter().all(p3),
+        Entity::MultiLeader(m) => m.lines.iter().flatten().all(p3),
+        Entity::MLine(l) => l
+            .vertices
+            .iter()
+            .all(|v| p3(&v.point) && p3(&v.miter_direction)),
+        Entity::Light(l) => p3(&l.position) && p3(&l.target),
+        Entity::Dimension(_) | Entity::Attdef(_) | Entity::Unknown { .. } => true,
+    }
+}
+
 /// [`render_entity`] once the caps have let the entity through.
 fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     let color = resolve_entity_color(e.common(), ctx);
@@ -684,9 +781,9 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider(c.center.x + c.radius, c.center.y + c.radius);
             Some(format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                c.center.x,
+                clean(c.center.x),
                 neg(c.center.y),
-                c.radius
+                clean(c.radius)
             ))
         }
         Entity::Arc(a) => {

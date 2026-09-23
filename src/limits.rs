@@ -94,6 +94,9 @@ pub enum Cap {
     /// A HATCH's pattern tile was more than 16 times the size of the shape
     /// it fills. The hatch keeps its outline but not its pattern.
     HatchTile,
+    /// A coordinate, size or angle the entity is drawn from is not a real
+    /// number (`NaN`, infinite). It is not drawn.
+    NotANumber,
 }
 
 /// One entity a cap acted on, so a report can name what is missing instead
@@ -136,6 +139,9 @@ pub struct LimitReport {
     /// Top-level entities drawn only as far as the 16 MiB one entity may
     /// emit: in the picture, but with their block expansion cut short.
     pub truncated_parts: usize,
+    /// Entities not drawn because a coordinate, size or angle they are drawn
+    /// from is not a real number.
+    pub unreadable_entities: usize,
     /// Which entities the counts above are about, in the order they were
     /// met: one entry per (entity, cap) pair, at most 100 of them.
     pub dropped: Vec<Dropped>,

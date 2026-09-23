@@ -114,6 +114,8 @@ the cap that acted on each). The caps:
 - A HATCH pattern's tile may be at most 16 times the boundary's diagonal: the tile is the
   rasterizer's pixmap, so a corrupt spacing of 1e12 over a ten-unit shape asks for a pixmap
   1e11 pixels on a side. The pattern is dropped and the outline kept.
+- An entity drawn from a coordinate, size or angle that is not a real number (`NaN`,
+  infinite) is not drawn: it names no place, and SVG has no way to write it.
 
 A block holding one LINE and eight INSERTs of itself used to expand into a million
 references and a 139 MB SVG before anything stopped it.

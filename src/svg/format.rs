@@ -7,19 +7,29 @@ use std::fmt::Write as _;
 use std::sync::LazyLock;
 use uncad_model::model::{Point2D, Point3D};
 
-/// Snaps a subnormal `f64` (magnitude roughly below 2.2e-308) to exactly
-/// `0.0`. Rust's `f64` `Display` never switches to scientific notation, so a
-/// subnormal coordinate stringifies as several hundred characters of leading
-/// zeros.
+/// Below this magnitude a value is geometrically indistinguishable from `0`
+/// at any realistic drawing scale, and Rust's `f64` `Display` -- which never
+/// switches to scientific notation -- would spell it out with that many
+/// leading zeros (1e-300 prints as 300 characters).
+const NEGLIGIBLE: f64 = 1e-12;
+
+/// Makes `x` safe to write into an SVG attribute: a value that is not a
+/// real number becomes `0.0`, and so does anything smaller than
+/// [`NEGLIGIBLE`] (subnormals included).
 ///
-/// At subnormal magnitude a value is geometrically indistinguishable from `0`
-/// at any realistic drawing scale, whatever made it that small -- this is a
-/// cheap backstop for any path that ends up formatting a float read straight
-/// out of memory. (One such bug, a wrong element stride in
-/// the parser's spline control-point stride, was found through exactly this
-/// symptom and fixed at its real source.)
+/// `NaN` and `inf` are not in SVG's `<number>` grammar: Rust writes them as
+/// the literals `NaN` and `inf`, which put the attribute -- and for a
+/// conforming reader the element -- in error. The renderer screens every
+/// entity for them before drawing it (an entity whose coordinates are not
+/// numbers is left out and reported), so this is the backstop for a value
+/// computed on the way, not the screen itself.
+///
+/// The small-magnitude half is a cheap backstop for any path that ends up
+/// formatting a float read straight out of memory. (One such bug, a wrong
+/// element stride in the parser's spline control-point stride, was found
+/// through exactly this symptom and fixed at its real source.)
 pub(super) fn clean(x: f64) -> f64 {
-    if x != 0.0 && x.is_subnormal() {
+    if !x.is_finite() || (x != 0.0 && x.abs() < NEGLIGIBLE) {
         0.0
     } else {
         x
@@ -112,6 +122,18 @@ mod tests {
         assert_eq!(clean(-1.5), -1.5);
         // A pointer bit-pattern reinterpreted as f64 typically lands here.
         assert_eq!(clean(f64::MIN_POSITIVE / 2.0), 0.0);
+    }
+
+    #[test]
+    fn clean_never_lets_a_non_number_or_a_page_of_zeros_through() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(clean(bad), 0.0);
+            assert_eq!(neg(bad).to_string(), "0");
+        }
+        // 1e-300 is a normal f64, but it prints as 300 characters.
+        assert_eq!(clean(1e-300).to_string(), "0");
+        assert_eq!(clean(-1e-13), 0.0);
+        assert_eq!(clean(1e-6), 1e-6);
     }
 
     #[test]

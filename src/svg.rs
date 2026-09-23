@@ -28,7 +28,8 @@ use format::{escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_fo
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
-    EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex, Point2D, Point3D,
+    EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex, MTextAttachment,
+    Point2D, Point3D,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
@@ -316,6 +317,38 @@ fn text_element(at: Point2D, height: f64, rotation: f64, color: &str, text: &str
         rotate_transform_attr(rotation, x, y),
         escape_xml(text)
     )
+}
+
+/// Where an MTEXT block goes relative to its insertion point: the SVG
+/// `text-anchor` and the y of the first line's baseline, in SVG coordinates
+/// (y down; `y` is the insertion point's). The block is `text_height` for its
+/// first line plus `line_height` for each further line; the attachment point
+/// says which of its nine points the insertion point is. A file that does
+/// not state the attachment keeps the insertion point as the first
+/// baseline, left-anchored -- no placement is guessed.
+fn mtext_placement(
+    attachment: Option<MTextAttachment>,
+    y: f64,
+    text_height: f64,
+    line_height: f64,
+    lines: usize,
+) -> (&'static str, f64) {
+    use MTextAttachment as A;
+    let Some(a) = attachment else {
+        return ("start", y);
+    };
+    let anchor = match a {
+        A::TopLeft | A::MiddleLeft | A::BottomLeft => "start",
+        A::TopCenter | A::MiddleCenter | A::BottomCenter => "middle",
+        A::TopRight | A::MiddleRight | A::BottomRight => "end",
+    };
+    let block = text_height + line_height * lines.saturating_sub(1) as f64;
+    let top = match a {
+        A::TopLeft | A::TopCenter | A::TopRight => y,
+        A::MiddleLeft | A::MiddleCenter | A::MiddleRight => y - block / 2.0,
+        A::BottomLeft | A::BottomCenter | A::BottomRight => y - block,
+    };
+    (anchor, top + text_height)
 }
 
 /// A small filled triangle at `tip`, pointing away from `from` -- LEADER and
@@ -638,6 +671,8 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             };
             let line_height = text_height * line_spacing_factor * 1.2;
             let (x, y) = (m.insertion_point.x, neg(m.insertion_point.y));
+            let (anchor, first_baseline) =
+                mtext_placement(m.attachment, y, text_height, line_height, lines.len());
             let mut tspans = String::new();
             for (i, line) in lines.iter().enumerate() {
                 let dy = if i == 0 { 0.0 } else { line_height };
@@ -648,7 +683,7 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 );
             }
             Some(format!(
-                "<text x=\"{x}\" y=\"{y}\" font-size=\"{text_height}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
+                "<text x=\"{x}\" y=\"{first_baseline}\" font-size=\"{text_height}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
                 neg(m.rotation.to_degrees())
             ))
         }
@@ -1382,5 +1417,21 @@ mod tests {
         // From 1.0 counter-clockwise round to 0.5: a sweep of TAU - 0.5.
         let n = arc_numbers(&render_one(ellipse(1.0, 0.5)));
         assert_eq!(n[5], 1.0, "large-arc flag: {n:?}");
+    }
+
+    #[test]
+    fn an_mtext_block_hangs_from_its_attachment_point() {
+        use MTextAttachment as A;
+        // Height 2, three lines 2.4 apart: a block 6.8 tall. SVG y points down.
+        let at = |a| mtext_placement(Some(a), 0.0, 2.0, 2.4, 3);
+        assert_eq!(at(A::TopLeft), ("start", 2.0));
+        let (anchor, baseline) = at(A::MiddleCenter);
+        assert_eq!(anchor, "middle");
+        assert!((baseline - (-3.4 + 2.0)).abs() < 1e-12);
+        let (anchor, baseline) = at(A::BottomRight);
+        assert_eq!(anchor, "end");
+        assert!((baseline - (-6.8 + 2.0)).abs() < 1e-12);
+        // Unstated: the insertion point stays the first baseline.
+        assert_eq!(mtext_placement(None, 5.0, 2.0, 2.4, 3), ("start", 5.0));
     }
 }

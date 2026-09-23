@@ -28,6 +28,10 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **LEADER arrowheads only where the file states one**: a leader whose file omits the
   arrowhead flag is drawn without an arrowhead.
 - **MTEXT formatting codes are stripped**, not interpreted: the text is drawn plain.
+- **MTEXT is placed by its attachment point**, one line per paragraph, with the line
+  height taken as 1.2 times the text height times the spacing factor -- an estimate, since
+  real line breaks and glyph metrics depend on the font. Where the drawing does not state
+  the attachment, the insertion point is used as the first line's baseline.
 
 What the renderer cannot draw at all (a type the model has no shape for arrives as
 `Entity::Unknown`) is reported in `ToSvgResult::unsupported_types`, sorted by name. The

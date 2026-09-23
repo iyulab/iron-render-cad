@@ -1919,6 +1919,7 @@ mod tests {
             pattern_lines: Vec::new(),
             elevation,
             extrusion,
+            style: None,
         })
     }
 

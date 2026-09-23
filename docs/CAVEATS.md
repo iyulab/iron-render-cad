@@ -43,6 +43,19 @@ What the renderer cannot draw at all (a type the model has no shape for arrives 
 one type that will stay there for good is `ACAD_PROXY_ENTITY`: an opaque per-application
 blob with no geometry.
 
+## A far-away drawing is written about its own middle
+
+usvg and tiny-skia keep coordinates in `f32`, which at 2.5e8 -- a plan in millimetres at
+projected map coordinates -- cannot tell two points 16 units apart. A drawing whose
+entities lie more than 32768 units from the world origin (by the median of one reference
+point per entity) is therefore written relative to that median, rounded to whole units, and
+`ToSvgResult::origin` says which point that is: an SVG unit `(u, v)` is the world point
+`(origin.x + u, origin.y - v)`. A block's interior is written about the point its placement
+sends to that origin, so a DIMENSION's block, whose children already hold world
+coordinates, is shifted too. A drawing nearer the origin is written in world units, as
+before. An isometric wireframe (see above) is projected before it is shifted, so a far-away
+3D body can still land at large coordinates.
+
 ## Characters XML forbids
 
 XML 1.0 forbids the C0 control characters other than tab, line feed and carriage return,

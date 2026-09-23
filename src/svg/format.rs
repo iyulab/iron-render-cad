@@ -54,16 +54,46 @@ pub(super) fn xy(points: &[Point3D]) -> Vec<Point2D> {
     points.iter().map(|p| Point2D { x: p.x, y: p.y }).collect()
 }
 
-/// A `points="..."` attribute value: every point cleaned and y-flipped.
-pub(super) fn points_attr(pts: &[Point2D]) -> String {
-    let mut s = String::new();
-    for (i, p) in pts.iter().enumerate() {
-        if i > 0 {
-            s.push(' ');
-        }
-        let _ = write!(s, "{},{}", clean(p.x), neg(p.y));
+/// The origin the emitted coordinates are relative to: an SVG user unit is
+/// the world minus this, y flipped. `(0, 0)` unless the drawing lies far
+/// from the world origin (see `svg::choose_origin`); inside a block
+/// reference, the block-local point that reference's placement sends to the
+/// enclosing frame's origin (see `svg::render_block_ref`).
+///
+/// Every coordinate the renderer writes goes through [`x`](Self::x),
+/// [`y`](Self::y) or [`points`](Self::points): usvg and tiny-skia keep path
+/// points in `f32`, so the numbers in the SVG must stay small even when the
+/// drawing's coordinates are not.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub(super) struct Frame {
+    pub(super) ox: f64,
+    pub(super) oy: f64,
+}
+
+impl Frame {
+    /// A world (or block-local) x as written in this frame.
+    pub(super) fn x(&self, x: f64) -> f64 {
+        clean(x - self.ox)
     }
-    s
+
+    /// A world (or block-local) y as written in this frame: shifted, then
+    /// flipped for SVG's y-down axis.
+    pub(super) fn y(&self, y: f64) -> f64 {
+        neg(y - self.oy)
+    }
+
+    /// A `points="..."` attribute value: every point shifted, cleaned and
+    /// y-flipped.
+    pub(super) fn points(&self, pts: &[Point2D]) -> String {
+        let mut s = String::new();
+        for (i, p) in pts.iter().enumerate() {
+            if i > 0 {
+                s.push(' ');
+            }
+            let _ = write!(s, "{},{}", self.x(p.x), self.y(p.y));
+        }
+        s
+    }
 }
 
 /// Escapes `s` for XML text content (`&`, `<`, `>`; quotes are left alone,
@@ -175,9 +205,20 @@ mod tests {
     }
 
     #[test]
-    fn points_attr_applies_clean_and_y_flip_to_each_point() {
+    fn frame_points_applies_the_origin_clean_and_y_flip_to_each_point() {
         let pts = vec![Point2D { x: 1.0, y: 2.0 }, Point2D { x: 3.0, y: -4.0 }];
-        assert_eq!(points_attr(&pts), "1,-2 3,4");
+        assert_eq!(Frame::default().points(&pts), "1,-2 3,4");
+        let far = Frame {
+            ox: 1.0e7,
+            oy: -2.0e7,
+        };
+        let pts = vec![Point2D {
+            x: 1.0e7 + 1.0,
+            y: -2.0e7 + 2.0,
+        }];
+        assert_eq!(far.points(&pts), "1,-2");
+        assert_eq!(far.x(1.0e7), 0.0);
+        assert!(far.y(-2.0e7).is_sign_positive(), "no -0");
     }
 
     #[test]

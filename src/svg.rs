@@ -28,9 +28,7 @@ use crate::limits::{
     MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
 };
 use bounds::{bbox_of, dominant_cluster_box, Box2D};
-use format::{
-    clean, escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy,
-};
+use format::{clean, escape_xml, neg, rotate_transform_attr, strip_mtext_formatting, xy, Frame};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -87,15 +85,57 @@ pub struct ToSvgResult {
     /// picture -- empty for every well-formed drawing. See
     /// [`crate::limits`].
     pub limits: LimitReport,
+    /// The world point the SVG's coordinates are written relative to: an
+    /// SVG user unit at `(u, v)` is the world point `(origin.x + u,
+    /// origin.y - v)`, the viewBox included. `(0, 0)` -- the SVG reads in
+    /// world units, y flipped -- unless the drawing lies more than 32768
+    /// units from the world origin: the rasterizer keeps coordinates in
+    /// `f32`, which at 2.5e8 cannot tell two points 16 units apart, so a
+    /// far-away drawing is written about a whole-unit point near its own
+    /// middle instead.
+    pub origin: Point2D,
 }
 
 // --- block transform ---------------------------------------------------
 
 /// The SVG `matrix(a b c d e f)` of a placement, composed with the
-/// renderer's CAD-y-up to SVG-y-down flip: conjugating the map by the flip
-/// negates the two off-diagonal entries and the y translation.
-fn svg_matrix(t: &Affine2) -> [f64; 6] {
-    [t.a, neg(t.b), neg(t.c), t.d, t.e, neg(t.f)]
+/// renderer's CAD-y-up to SVG-y-down flip on both sides: a point the child
+/// writes as `child.x(p), child.y(p)` in its own frame lands where the
+/// parent writes the placed point in its frame. Conjugating the linear part
+/// by the flip negates the two off-diagonal entries; the translation is
+/// wherever the placement puts the child frame's origin, written in the
+/// parent's frame -- exactly zero when the child frame is the pullback of
+/// the parent's, which [`render_block_ref`] chooses whenever a render origin
+/// is in use.
+fn svg_matrix(t: &Affine2, parent: Frame, child: Frame) -> [f64; 6] {
+    let o = t.apply(Point2D {
+        x: child.ox,
+        y: child.oy,
+    });
+    [
+        clean(t.a),
+        neg(t.b),
+        neg(t.c),
+        clean(t.d),
+        parent.x(o.x),
+        parent.y(o.y),
+    ]
+}
+
+/// The local point `t` sends to `p`: [`Affine2::apply`] run backwards.
+/// `None` when the placement is singular (a zero scale flattens the block)
+/// or the answer is not a usable number.
+fn invert_point(t: &Affine2, p: Point2D) -> Option<Point2D> {
+    let det = t.determinant();
+    if !det.is_finite() || det == 0.0 {
+        return None;
+    }
+    let (dx, dy) = (p.x - t.e, p.y - t.f);
+    let local = Point2D {
+        x: (t.d * dx - t.c * dy) / det,
+        y: (t.a * dy - t.b * dx) / det,
+    };
+    (local.x.is_finite() && local.y.is_finite()).then_some(local)
 }
 
 // --- render context ----------------------------------------------------
@@ -118,6 +158,11 @@ struct Ctx<'a> {
     /// Local (inside the block being rendered) -> world, composed across
     /// nested block references through the model's placement arithmetic.
     transform: Affine2,
+    /// The origin the coordinates written now are relative to: the render's
+    /// origin at the top level, and inside a block reference the local point
+    /// its placement sends there (see [`render_block_ref`]). `transform`
+    /// and the bounds stay in world units.
+    frame: Frame,
     /// `<defs>` entries accumulated by HATCH rendering, emitted once into a
     /// top-level `<defs>` by [`to_svg`]. Persists across `render_block_ref`'s
     /// transform save/restore, since a HATCH can appear inside a block too.
@@ -157,6 +202,7 @@ impl<'a> Ctx<'a> {
             scale: 1.0,
             inherited_color: DEFAULT_COLOR.to_string(),
             transform: Affine2::IDENTITY,
+            frame: Frame::default(),
             defs: Vec::new(),
             next_def_id: 0,
             block_ref_budget: MAX_BLOCK_REFS,
@@ -325,27 +371,34 @@ fn ellipse_minor_axis(el: &EllipseEntity) -> Point3D {
 
 /// A `<polyline>`, or a `<polygon>` when `closed` -- the shape every polyline
 /// entity renders to.
-fn polyline_element(pts: &[Point2D], closed: bool, color: &str) -> String {
+fn polyline_element(pts: &[Point2D], closed: bool, color: &str, frame: Frame) -> String {
     let tag = if closed { "polygon" } else { "polyline" };
     format!(
         "<{tag} points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-        points_attr(pts)
+        frame.points(pts)
     )
 }
 
 /// A dashed outline, used for the shapes this renderer draws as an indication
 /// rather than as real geometry (VIEWPORT frames, WIPEOUT boundaries).
-fn dashed_outline(pts: &[Point2D], color: &str, dash: &str) -> String {
+fn dashed_outline(pts: &[Point2D], color: &str, dash: &str, frame: Frame) -> String {
     format!(
         "<polygon points=\"{}\" fill=\"none\" stroke-dasharray=\"{dash}\" stroke=\"{color}\"/>",
-        points_attr(pts)
+        frame.points(pts)
     )
 }
 
-/// A single-line `<text>` at an already-y-flipped position -- TEXT, ATTRIB and
-/// TOLERANCE all render to this.
-fn text_element(at: Point2D, height: f64, rotation: f64, color: &str, text: &str) -> String {
-    let (x, y) = (at.x, neg(at.y));
+/// A single-line `<text>` at `at` -- TEXT, ATTRIB and TOLERANCE all render
+/// to this.
+fn text_element(
+    at: Point2D,
+    height: f64,
+    rotation: f64,
+    color: &str,
+    text: &str,
+    frame: Frame,
+) -> String {
+    let (x, y) = (frame.x(at.x), frame.y(at.y));
     format!(
         "<text x=\"{x}\" y=\"{y}\" font-size=\"{height}\" fill=\"{color}\" stroke=\"none\"{}>{}</text>",
         rotate_transform_attr(rotation, x, y),
@@ -387,7 +440,13 @@ fn mtext_placement(
 
 /// A small filled triangle at `tip`, pointing away from `from` -- LEADER and
 /// MULTILEADER arrowheads.
-fn arrowhead_element(tip: &Point2D, from: &Point2D, size: f64, color: &str) -> String {
+fn arrowhead_element(
+    tip: &Point2D,
+    from: &Point2D,
+    size: f64,
+    color: &str,
+    frame: Frame,
+) -> String {
     let (dx, dy) = (tip.x - from.x, tip.y - from.y);
     let len = dx.hypot(dy);
     let len = if len == 0.0 { 1.0 } else { len };
@@ -397,11 +456,13 @@ fn arrowhead_element(tip: &Point2D, from: &Point2D, size: f64, color: &str) -> S
     let (p2x, p2y) = (back_x + px * size * 0.35, back_y + py * size * 0.35);
     let (p3x, p3y) = (back_x - px * size * 0.35, back_y - py * size * 0.35);
     format!(
-        "<polygon points=\"{},{} {p2x},{} {p3x},{}\" fill=\"{color}\" stroke=\"none\"/>",
-        tip.x,
-        neg(tip.y),
-        neg(p2y),
-        neg(p3y)
+        "<polygon points=\"{},{} {},{} {},{}\" fill=\"{color}\" stroke=\"none\"/>",
+        frame.x(tip.x),
+        frame.y(tip.y),
+        frame.x(p2x),
+        frame.y(p2y),
+        frame.x(p3x),
+        frame.y(p3y)
     )
 }
 
@@ -428,10 +489,13 @@ fn wireframe_element(edges: &[[Point3D; 2]], color: &str, ctx: &mut Ctx) -> Stri
             let (x2, y2) = project_isometric(b);
             ctx.consider(x1, y1);
             ctx.consider(x2, y2);
+            let frame = ctx.frame;
             format!(
-                "<line x1=\"{x1}\" y1=\"{}\" x2=\"{x2}\" y2=\"{}\" stroke=\"{color}\"/>",
-                neg(y1),
-                neg(y2)
+                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{color}\"/>",
+                frame.x(x1),
+                frame.y(y1),
+                frame.x(x2),
+                frame.y(y2)
             )
         })
         .collect::<Vec<_>>()
@@ -511,6 +575,33 @@ fn render_block_ref(
     let parent_scale = ctx.scale;
     let parent_inherited = std::mem::replace(&mut ctx.inherited_color, color.to_string());
 
+    // Which point of the block's own space its interior is written about.
+    // For a drawing near the origin (the parent frame is the default) it is
+    // (0, 0): the interior is written in the block's own coordinates and the
+    // placement goes into the group's matrix. When a render origin is in use
+    // that is wrong -- a DIMENSION's block is placed through an identity
+    // precisely because its children already hold world coordinates, and
+    // they would be written at full world magnitude, where the rasterizer's
+    // f32 quantizes them away. So the interior is then written about the
+    // point this placement sends to the parent frame's origin: every
+    // number stays near zero, and the group's own translation is zero.
+    let parent_frame = ctx.frame;
+    let child_frame = if parent_frame == Frame::default() {
+        Frame::default()
+    } else {
+        match invert_point(
+            &child_transform,
+            Point2D {
+                x: parent_frame.ox,
+                y: parent_frame.oy,
+            },
+        ) {
+            Some(o) => Frame { ox: o.x, oy: o.y },
+            // A singular placement flattens the block whatever the frame.
+            None => Frame::default(),
+        }
+    };
+    ctx.frame = child_frame;
     ctx.transform = child_transform.then(&parent_transform);
     // How much this block's contents are scaled, for stroke widths: the
     // area scale of the composed placement. Derived from the placement
@@ -538,6 +629,7 @@ fn render_block_ref(
     }
 
     ctx.transform = parent_transform;
+    ctx.frame = parent_frame;
     ctx.depth = parent_depth;
     ctx.scale = parent_scale;
     ctx.inherited_color = parent_inherited;
@@ -550,7 +642,7 @@ fn render_block_ref(
     // The parent transform is baked into ctx.transform for *bounds* purposes
     // (world-space consider()), but the emitted matrix is only this block's own
     // local transform -- nesting is expressed by nested <g> elements.
-    let [a, b, c, d, e, f] = svg_matrix(&child_transform);
+    let [a, b, c, d, e, f] = svg_matrix(&child_transform, parent_frame, child_frame);
     format!(
         "<g transform=\"matrix({a} {b} {c} {d} {e} {f})\" stroke-width=\"{}\">\n  {}\n</g>",
         stroke_width_placeholder(cumulative_scale),
@@ -758,16 +850,17 @@ fn numbers_are_real(e: &Entity) -> bool {
 /// [`render_entity`] once the caps have let the entity through.
 fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     let color = resolve_entity_color(e.common(), ctx);
+    let frame = ctx.frame;
     match e {
         Entity::Line(l) => {
             ctx.consider(l.start_point.x, l.start_point.y);
             ctx.consider(l.end_point.x, l.end_point.y);
             Some(format!(
                 "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{color}\"/>",
-                l.start_point.x,
-                neg(l.start_point.y),
-                l.end_point.x,
-                neg(l.end_point.y)
+                frame.x(l.start_point.x),
+                frame.y(l.start_point.y),
+                frame.x(l.end_point.x),
+                frame.y(l.end_point.y)
             ))
         }
         Entity::Circle(c) => {
@@ -775,8 +868,8 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider(c.center.x + c.radius, c.center.y + c.radius);
             Some(format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                clean(c.center.x),
-                neg(c.center.y),
+                frame.x(c.center.x),
+                frame.y(c.center.y),
                 clean(c.radius)
             ))
         }
@@ -791,22 +884,27 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 sweep += 2.0 * std::f64::consts::PI;
             }
             let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
+            let r = clean(r);
             Some(format!(
-                "<path d=\"M {x1} {} A {r} {r} 0 {large} 0 {x2} {}\" fill=\"none\" stroke=\"{color}\"/>",
-                neg(y1), neg(y2)
+                "<path d=\"M {} {} A {r} {r} 0 {large} 0 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+                frame.x(x1),
+                frame.y(y1),
+                frame.x(x2),
+                frame.y(y2)
             ))
         }
         Entity::Ellipse(el) => {
             let rx = el.major_axis_endpoint.x.hypot(el.major_axis_endpoint.y);
             ctx.consider(el.center.x - rx, el.center.y - rx);
             ctx.consider(el.center.x + rx, el.center.y + rx);
-            let ry = rx * el.axis_ratio;
+            let ry = clean(rx * el.axis_ratio);
+            let rx = clean(rx);
             let rot = el
                 .major_axis_endpoint
                 .y
                 .atan2(el.major_axis_endpoint.x)
                 .to_degrees();
-            let (cx, cy) = (el.center.x, neg(el.center.y));
+            let (cx, cy) = (frame.x(el.center.x), frame.y(el.center.y));
             let sweep = ellipse_sweep(el.start_angle, el.end_angle);
             if sweep >= std::f64::consts::TAU {
                 return Some(format!(
@@ -829,7 +927,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                         )
                     })
                     .collect();
-                return Some(polyline_element(&points, false, &color));
+                return Some(polyline_element(&points, false, &color, frame));
             }
             // A partial ellipse: the same exact arc command ARC uses, with
             // the axes and rotation of the ellipse. Counter-clockwise in the
@@ -841,23 +939,23 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             let sweep_flag = if e.z < 0.0 { 1 } else { 0 };
             Some(format!(
                 "<path d=\"M {} {} A {rx} {ry} {} {large} {sweep_flag} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
-                p1.x,
-                neg(p1.y),
+                frame.x(p1.x),
+                frame.y(p1.y),
                 neg(rot),
-                p2.x,
-                neg(p2.y)
+                frame.x(p2.x),
+                frame.y(p2.y)
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
             ctx.consider_all(&p.vertices);
-            Some(polyline_element(&p.vertices, p.closed, &color))
+            Some(polyline_element(&p.vertices, p.closed, &color, frame))
         }
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {
                 return None;
             }
             ctx.consider_all_3d(&p.vertices);
-            Some(polyline_element(&xy(&p.vertices), p.closed, &color))
+            Some(polyline_element(&xy(&p.vertices), p.closed, &color, frame))
         }
         Entity::Text(t) => {
             ctx.consider(t.start_point.x, t.start_point.y);
@@ -867,6 +965,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 t.rotation,
                 &color,
                 &t.text,
+                frame,
             ))
         }
         Entity::Attrib(a) => {
@@ -880,6 +979,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 a.rotation,
                 &color,
                 &a.text,
+                frame,
             ))
         }
         Entity::Tolerance(t) => {
@@ -899,6 +999,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 0.0,
                 &color,
                 &t.text_value,
+                frame,
             ))
         }
         Entity::MText(m) => {
@@ -921,7 +1022,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 m.line_spacing_factor
             };
             let line_height = text_height * line_spacing_factor * 1.2;
-            let (x, y) = (m.insertion_point.x, neg(m.insertion_point.y));
+            let (x, y) = (frame.x(m.insertion_point.x), frame.y(m.insertion_point.y));
             let (anchor, first_baseline) =
                 mtext_placement(m.attachment, y, text_height, line_height, lines.len());
             let mut tspans = String::new();
@@ -942,8 +1043,8 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider(p.position.x, p.position.y);
             Some(format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"0.5\" fill=\"{color}\" stroke=\"none\"/>",
-                p.position.x,
-                neg(p.position.y)
+                frame.x(p.position.x),
+                frame.y(p.position.y)
             ))
         }
         Entity::Solid(s) | Entity::Trace(s) => {
@@ -952,7 +1053,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider_all(&pts);
             Some(format!(
                 "<polygon points=\"{}\" fill=\"{color}\" fill-opacity=\"0.6\" stroke=\"none\"/>",
-                points_attr(&pts)
+                frame.points(&pts)
             ))
         }
         Entity::Face3D(f) => {
@@ -962,7 +1063,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider_all(&pts);
             Some(format!(
                 "<polygon points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                points_attr(&pts)
+                frame.points(&pts)
             ))
         }
         Entity::Ray(r) | Entity::XLine(r) => {
@@ -977,8 +1078,11 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             };
             let (x2, y2) = (r.point.x + dx, r.point.y + dy);
             Some(format!(
-                "<line x1=\"{x1}\" y1=\"{}\" x2=\"{x2}\" y2=\"{}\" stroke-dasharray=\"4,2\" stroke=\"{color}\"/>",
-                neg(y1), neg(y2)
+                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke-dasharray=\"4,2\" stroke=\"{color}\"/>",
+                frame.x(x1),
+                frame.y(y1),
+                frame.x(x2),
+                frame.y(y2)
             ))
         }
         Entity::Insert(i) => Some(render_block_ref(
@@ -1005,7 +1109,9 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         )),
         Entity::Dimension(d) => {
             // The cached geometry block is already in final world coordinates,
-            // so it is drawn with an identity transform.
+            // so it is drawn with an identity transform -- which is also what
+            // keeps its interior in the render's own frame (see
+            // [`render_block_ref`]).
             let svg = render_block_ref(e, &d.block_name, Affine2::IDENTITY, &color, ctx);
             if svg.is_empty() {
                 ctx.unsupported.insert("DIMENSION".to_string());
@@ -1037,7 +1143,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 },
             ];
             ctx.consider_all(&corners);
-            Some(dashed_outline(&corners, &color, "2,2"))
+            Some(dashed_outline(&corners, &color, "2,2", frame))
         }
         Entity::Wipeout(w) => {
             // Outline only, not filled: a filled shape would mask whatever is
@@ -1050,7 +1156,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 return None;
             }
             ctx.consider_all(&w.boundary);
-            Some(dashed_outline(&w.boundary, &color, "2,2"))
+            Some(dashed_outline(&w.boundary, &color, "2,2", frame))
         }
         Entity::Spline(s) => {
             let pts = spline::spline_points(s);
@@ -1058,7 +1164,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 return None;
             }
             ctx.consider_all(&pts);
-            Some(polyline_element(&pts, false, &color))
+            Some(polyline_element(&pts, false, &color, frame))
         }
         Entity::Solid3D(s) => render_wireframe_entity(&s.wireframe_edges, "3DSOLID", &color, ctx),
         Entity::Region(r) => render_wireframe_entity(&r.wireframe_edges, "REGION", &color, ctx),
@@ -1072,11 +1178,11 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             }
             ctx.consider_all_3d(&l.vertices);
             let pts = xy(&l.vertices);
-            let line = polyline_element(&pts, false, &color);
+            let line = polyline_element(&pts, false, &color, frame);
             // A leader whose file does not state the flag draws none: an
             // arrowhead is a claim about the drawing, and nothing made it.
             let arrow = if l.has_arrowhead == Some(true) && pts.len() >= 2 {
-                arrowhead_element(&pts[0], &pts[1], ARROWHEAD_SIZE, &color)
+                arrowhead_element(&pts[0], &pts[1], ARROWHEAD_SIZE, &color, frame)
             } else {
                 String::new()
             };
@@ -1093,13 +1199,14 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 }
                 ctx.consider_all_3d(line);
                 let pts = xy(line);
-                parts.push(polyline_element(&pts, false, &color));
+                parts.push(polyline_element(&pts, false, &color, frame));
                 let n = pts.len();
                 parts.push(arrowhead_element(
                     &pts[n - 1],
                     &pts[n - 2],
                     ARROWHEAD_SIZE,
                     &color,
+                    frame,
                 ));
             }
             (!parts.is_empty()).then(|| parts.join("\n  "))
@@ -1124,7 +1231,12 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             let lines: Vec<String> = offsets
                 .iter()
                 .map(|&offset| {
-                    polyline_element(&mline_offset_points(&l.vertices, offset), l.closed, &color)
+                    polyline_element(
+                        &mline_offset_points(&l.vertices, offset),
+                        l.closed,
+                        &color,
+                        frame,
+                    )
                 })
                 .collect();
             Some(lines.join("\n  "))
@@ -1133,8 +1245,8 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider(l.position.x, l.position.y);
             let marker = format!(
                 "<circle cx=\"{}\" cy=\"{}\" r=\"0.5\" fill=\"none\" stroke=\"{color}\"/>",
-                l.position.x,
-                neg(l.position.y)
+                frame.x(l.position.x),
+                frame.y(l.position.y)
             );
             // Distant and spot lights aim at their target; a point light,
             // or a light whose file does not say what kind it is, gets the
@@ -1147,7 +1259,10 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider(l.target.x, l.target.y);
             let line = format!(
                 "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke-dasharray=\"1,1\" stroke=\"{color}\"/>",
-                l.position.x, neg(l.position.y), l.target.x, neg(l.target.y)
+                frame.x(l.position.x),
+                frame.y(l.position.y),
+                frame.x(l.target.x),
+                frame.y(l.target.y)
             );
             Some(format!("{marker}\n  {line}"))
         }
@@ -1219,6 +1334,88 @@ fn select_entities_for_space(db: &CadDatabase, space: Space) -> Vec<&Entity> {
         .collect()
 }
 
+/// Coordinates this far from the world origin (in drawing units) get the
+/// render written about a local origin instead: below it an `f32` still
+/// resolves better than 1/250 of a unit, far finer than any stroke, so a
+/// drawing near the origin keeps its world-unit SVG byte for byte.
+const ORIGIN_SHIFT_THRESHOLD: f64 = 32768.0;
+
+/// One cheap reference point per entity -- an end, a centre, an insertion
+/// point -- for [`choose_origin`]'s median.
+fn reference_point(e: &Entity) -> Option<Point2D> {
+    let p3 = |p: &Point3D| Point2D { x: p.x, y: p.y };
+    Some(match e {
+        Entity::Line(l) => p3(&l.start_point),
+        Entity::Circle(c) => p3(&c.center),
+        Entity::Arc(a) => p3(&a.center),
+        Entity::Ellipse(el) => p3(&el.center),
+        Entity::LwPolyline(p) | Entity::Polyline2D(p) => *p.vertices.first()?,
+        Entity::Polyline3D(p) => p3(p.vertices.first()?),
+        Entity::Text(t) => t.start_point,
+        Entity::Attrib(a) => a.start_point,
+        Entity::Attdef(a) => a.start_point,
+        Entity::Tolerance(t) => p3(&t.insertion_point),
+        Entity::MText(m) => p3(&m.insertion_point),
+        Entity::Point(p) => p3(&p.position),
+        Entity::Solid(s) | Entity::Trace(s) => s.corner1,
+        Entity::Face3D(f) => p3(&f.corner1),
+        Entity::Ray(r) | Entity::XLine(r) => p3(&r.point),
+        Entity::Insert(i) => p3(&i.insertion_point),
+        Entity::AcadTable(a) => p3(&a.insertion_point),
+        Entity::Dimension(d) => d.text_midpoint,
+        Entity::Viewport(v) => p3(&v.center),
+        Entity::Wipeout(w) => *w.boundary.first()?,
+        Entity::Spline(s) => p3(s.fit_points.first().or(s.control_points.first())?),
+        Entity::Solid3D(s) | Entity::Region(s) | Entity::PolylinePFace(s) => {
+            p3(&s.wireframe_edges.first()?[0])
+        }
+        Entity::Hatch(h) => match h.boundary_paths.first()? {
+            HatchBoundaryPath::Polyline(v) => *v.first()?,
+            HatchBoundaryPath::Edges(edges) => match edges.first()? {
+                HatchEdge::Line { start } => *start,
+                HatchEdge::Arc { center, .. } | HatchEdge::Ellipse { center, .. } => *center,
+                HatchEdge::Spline { control_points } => *control_points.first()?,
+            },
+        },
+        Entity::Leader(l) => p3(l.vertices.first()?),
+        Entity::MultiLeader(m) => p3(m.lines.first()?.first()?),
+        Entity::MLine(l) => p3(&l.vertices.first()?.point),
+        Entity::Light(l) => p3(&l.position),
+        Entity::Unknown { .. } => return None,
+    })
+}
+
+/// The origin a render of `selected` is written relative to: the per-axis
+/// median of the entities' reference points, rounded to whole units, when it
+/// lies more than [`ORIGIN_SHIFT_THRESHOLD`] from the world origin on either
+/// axis; `(0, 0)` otherwise. The median rather than the extent's corner, so
+/// the choice is settled before anything is drawn and one far-away outlier
+/// does not move it.
+fn choose_origin(selected: &[&Entity]) -> Point2D {
+    let mut xs: Vec<f64> = Vec::with_capacity(selected.len());
+    let mut ys: Vec<f64> = Vec::with_capacity(selected.len());
+    for p in selected.iter().filter_map(|e| reference_point(e)) {
+        if p.x.is_finite() && p.y.is_finite() {
+            xs.push(p.x);
+            ys.push(p.y);
+        }
+    }
+    let origin = Point2D { x: 0.0, y: 0.0 };
+    if xs.is_empty() {
+        return origin;
+    }
+    let median = |v: &mut Vec<f64>| {
+        v.sort_by(|a, b| a.total_cmp(b));
+        v[v.len() / 2].round()
+    };
+    let (mx, my) = (median(&mut xs), median(&mut ys));
+    if mx.abs().max(my.abs()) > ORIGIN_SHIFT_THRESHOLD {
+        Point2D { x: mx, y: my }
+    } else {
+        origin
+    }
+}
+
 // --- top level ---------------------------------------------------------
 
 /// Renders a parsed [`CadDatabase`] to an SVG string.
@@ -1234,8 +1431,14 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
     let mut entity_boxes: Vec<Box2D> = Vec::new();
     let mut body: Vec<String> = Vec::new();
 
+    let selected = select_entities_for_space(db, options.space);
+    let origin = choose_origin(&selected);
     let mut ctx = Ctx::new(&db.tables);
-    for e in select_entities_for_space(db, options.space) {
+    ctx.frame = Frame {
+        ox: origin.x,
+        oy: origin.y,
+    };
+    for e in selected {
         ctx.reset_entity_bounds();
         ctx.entity_start = ctx.emitted;
         ctx.part_truncated = false;
@@ -1282,8 +1485,10 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         raw_bounds()
     };
 
-    let x = bounds.min_x - options.padding;
-    let y = -bounds.max_y - options.padding;
+    // The viewBox in world units, then written in the render's frame like
+    // every coordinate inside it.
+    let x = bounds.min_x - options.padding - origin.x;
+    let y = -bounds.max_y - options.padding + origin.y;
     let width = (bounds.max_x - bounds.min_x) + options.padding * 2.0;
     let height = (bounds.max_y - bounds.min_y) + options.padding * 2.0;
     let effective_stroke_width = options
@@ -1311,6 +1516,7 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         unsupported_types: ctx.unsupported.into_iter().collect(),
         empty_blocks: ctx.empty_blocks.into_iter().collect(),
         limits: ctx.limits,
+        origin,
     }
 }
 
@@ -1489,7 +1695,7 @@ mod tests {
             2.0,
             std::f64::consts::FRAC_PI_2,
         );
-        let [a, b, c, d, e, f] = svg_matrix(&t);
+        let [a, b, c, d, e, f] = svg_matrix(&t, Frame::default(), Frame::default());
         let (x, y) = (a * 1.0 + c * 0.0 + e, b * 1.0 + d * 0.0 + f);
         close(x, 10.0);
         close(y, -22.0);

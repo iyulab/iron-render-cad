@@ -18,8 +18,10 @@ useful than a gap -- but a reader should know which parts are approximate:
   curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs; a mirrored ellipse -- normal
   (0, 0, -1) -- runs the other way. An ELLIPSE on a tilted plane is drawn through 64 points
   of its outline seen from above.)
-- **3DSOLID / REGION / POLYLINE_PFACE as isometric wireframes**: the model carries a
-  solid's edges only; the renderer projects them isometrically and draws the lines.
+- **3DSOLID / REGION / POLYLINE_PFACE as wireframes**: the model carries a solid's edges
+  only, and the renderer draws the lines. A body flat in a plane parallel to XY (a REGION
+  is a closed 2D profile, so usually) is drawn in plan, where the file puts it; a body with
+  depth is projected isometrically.
 - **VIEWPORT and WIPEOUT as outlines**: a viewport's frame, a wipeout's clip boundary;
   neither the viewport's contents nor the wipeout's masking are rendered.
 - **TOLERANCE as plain text**: the feature-control-frame string is drawn as text, with its
@@ -83,8 +85,8 @@ point per entity) is therefore written relative to that median, rounded to whole
 `(origin.x + u, origin.y - v)`. A block's interior is written about the point its placement
 sends to that origin, so a DIMENSION's block, whose children already hold world
 coordinates, is shifted too. A drawing nearer the origin is written in world units, as
-before. An isometric wireframe (see above) is projected before it is shifted, so a far-away
-3D body can still land at large coordinates.
+before. An isometric wireframe of a body with depth (see above) is projected before it is
+shifted, so a far-away 3D body can still land at large coordinates.
 
 ## Characters XML forbids
 

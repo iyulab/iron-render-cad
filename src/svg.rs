@@ -583,14 +583,52 @@ fn project_isometric(p: &Point3D) -> (f64, f64) {
     ((p.x - p.z) * cos30, p.y + (p.x + p.z) * sin30)
 }
 
-/// One `<line>` per edge, isometrically projected -- shared by 3DSOLID, REGION
-/// and POLYLINE_PFACE, which all reduce to a set of 3D edges.
+/// Whether every one of these edges lies in one plane parallel to XY, so the
+/// body has a true plan view and needs no projecting.
+///
+/// A REGION is built from a closed 2D profile, so this is the normal case
+/// for one; a 3DSOLID or POLYLINE_PFACE reaches it whenever the body is
+/// flat. The test is on the z span against the xy span, relatively, because
+/// a body's vertices come back with rounding noise around their plane; the
+/// floor of 1 keeps a flat but tiny profile from being judged by its own
+/// size.
+fn flat_in_xy(edges: &[[Point3D; 2]]) -> bool {
+    let (mut lo_z, mut hi_z) = (f64::INFINITY, f64::NEG_INFINITY);
+    let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
+    for p in edges.iter().flatten() {
+        lo_z = lo_z.min(p.z);
+        hi_z = hi_z.max(p.z);
+        lo = lo.min(p.x).min(p.y);
+        hi = hi.max(p.x).max(p.y);
+    }
+    if !lo_z.is_finite() {
+        return false;
+    }
+    (hi_z - lo_z) <= 1e-9 * (hi - lo).max(1.0)
+}
+
+/// One `<line>` per edge -- shared by 3DSOLID, REGION and POLYLINE_PFACE,
+/// which all reduce to a set of 3D edges.
+///
+/// A body flat in a plane parallel to XY is drawn in that plane, where the
+/// file puts it. Only a body with depth goes through [`project_isometric`],
+/// which scales x and shears y: a flat rectangle drawn that way came out as a
+/// parallelogram of the wrong size, away from the rest of the drawing, and
+/// its extent with it.
 fn wireframe_element(edges: &[[Point3D; 2]], color: &str, ctx: &mut Ctx) -> String {
+    let flat = flat_in_xy(edges);
+    let place = |p: &Point3D| {
+        if flat {
+            (p.x, p.y)
+        } else {
+            project_isometric(p)
+        }
+    };
     edges
         .iter()
         .map(|[a, b]| {
-            let (x1, y1) = project_isometric(a);
-            let (x2, y2) = project_isometric(b);
+            let (x1, y1) = place(a);
+            let (x2, y2) = place(b);
             ctx.consider(x1, y1);
             ctx.consider(x2, y2);
             let frame = ctx.frame;
@@ -2012,6 +2050,23 @@ mod tests {
             0.25,
         );
         assert!(nested.contains("scale(0.0625)"), "{nested}");
+    }
+
+    fn p3(x: f64, y: f64, z: f64) -> Point3D {
+        Point3D { x, y, z }
+    }
+
+    #[test]
+    fn flat_in_xy_tolerates_rounding_noise_but_not_real_depth() {
+        // 1e-12 over a ten-unit profile is flat, 1e-3 is not.
+        assert!(flat_in_xy(&[[p3(0.0, 0.0, 0.0), p3(10.0, 10.0, 1e-12)]]));
+        assert!(!flat_in_xy(&[[p3(0.0, 0.0, 0.0), p3(10.0, 10.0, 1e-3)]]));
+        // A tiny but flat profile is judged against the floor of 1, not
+        // against its own size.
+        assert!(flat_in_xy(&[[p3(0.0, 0.0, 0.0), p3(0.001, 0.001, 0.0)]]));
+        // A flat profile off z = 0 is still flat.
+        assert!(flat_in_xy(&[[p3(0.0, 0.0, 7.0), p3(5.0, 5.0, 7.0)]]));
+        assert!(!flat_in_xy(&[]));
     }
 
     #[test]

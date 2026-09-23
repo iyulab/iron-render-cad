@@ -3,7 +3,7 @@
 //! The model keeps the string the file wrote; the renderer decodes it. The
 //! expected strings are what AutoCAD displays for each code.
 
-use iron_render_cad::{to_svg, Space, ToSvgOptions};
+use iron_render_cad::{to_svg, Space, ToSvgOptions, DEFAULT_CAP_HEIGHT};
 use uncad_model::model::{
     Confidence, Entity, EntityCommon, EntityId, MTextAttachment, MTextEntity, Origin, Point2D,
     Point3D, Ref, TextEntity,
@@ -51,6 +51,10 @@ fn mtext(raw: &str, attachment: Option<MTextAttachment>) -> Entity {
 }
 
 fn svg(entity: Entity) -> String {
+    svg_with(entity, DEFAULT_CAP_HEIGHT)
+}
+
+fn svg_with(entity: Entity, cap_height: f64) -> String {
     let db = CadDatabase {
         entities: vec![entity],
         tables: Tables::default(),
@@ -60,10 +64,17 @@ fn svg(entity: Entity) -> String {
         &db,
         ToSvgOptions {
             space: Space::All,
+            cap_height,
             ..ToSvgOptions::default()
         },
     )
     .svg
+}
+
+/// The `font-size` of the first `<text>` in `svg`.
+fn font_size(svg: &str) -> f64 {
+    let at = svg.find("font-size=\"").unwrap() + "font-size=\"".len();
+    svg[at..at + svg[at..].find('"').unwrap()].parse().unwrap()
 }
 
 /// Every `dy="..."` in `svg`, in order.
@@ -130,4 +141,32 @@ fn a_text_whose_file_stores_height_zero_is_still_drawn() {
     let out = svg(text("ZERO", 0.0));
     assert!(out.contains(">ZERO</text>"), "{out}");
     assert!(!out.contains("font-size=\"0\""), "{out}");
+}
+
+#[test]
+fn text_is_drawn_with_capitals_the_size_of_the_cad_height() {
+    // A CAD text height is the height of the capitals. In a face whose
+    // capitals are 0.7 of the em, a height-2 text is written at font-size
+    // 2 / 0.7, so its capitals come out 2 units tall.
+    assert!((font_size(&svg(text("A", 2.0))) - 2.0 / 0.7).abs() < 1e-12);
+    // A caller drawing with a face of its own says what that face's ratio
+    // is (0.733 is one such face's OS/2 sCapHeight over its em).
+    assert!((font_size(&svg_with(text("A", 2.0), 0.733)) - 2.0 / 0.733).abs() < 1e-12);
+    // A ratio that is not a positive number is taken as the default.
+    for bad in [0.0, -1.0, f64::NAN] {
+        assert!((font_size(&svg_with(text("A", 2.0), bad)) - 2.0 / 0.7).abs() < 1e-12);
+    }
+    // MTEXT too.
+    let out = svg(mtext("A", None));
+    assert!((font_size(&out) - 10.0 / 0.7).abs() < 1e-12, "{out}");
+}
+
+#[test]
+fn mtext_lines_are_five_thirds_of_the_text_height_apart() {
+    // AutoCAD's single line spacing, times the MTEXT's spacing factor (1).
+    let out = svg(mtext(r"A\PB\PC", Some(MTextAttachment::TopLeft)));
+    let dy = dys(&out);
+    assert_eq!(dy.len(), 3, "{out}");
+    assert!((dy[1] - 10.0 * 5.0 / 3.0).abs() < 1e-9, "{dy:?}");
+    assert!((dy[2] - 10.0 * 5.0 / 3.0).abs() < 1e-9, "{dy:?}");
 }

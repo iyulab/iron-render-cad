@@ -60,7 +60,21 @@ pub struct ToSvgOptions {
     pub stroke_width: Option<f64>,
     pub space: Space,
     pub outlier_trim: bool,
+    /// How tall a capital letter is in the face the text will be drawn with,
+    /// as a fraction of its em (the font's OS/2 `sCapHeight` over its units
+    /// per em). A CAD text height is the height of the capitals, so a text of
+    /// height `h` is written at `font-size = h / cap_height`, and its
+    /// capitals come out `h` tall in that face. Default
+    /// [`DEFAULT_CAP_HEIGHT`]; a value that is not a positive number is
+    /// taken as the default.
+    pub cap_height: f64,
 }
+
+/// [`ToSvgOptions::cap_height`]'s default, 0.7: sans-serif faces measure
+/// 0.70 to 0.73 (Segoe UI 0.700, Arial 0.716, Malgun Gothic 0.718, Verdana
+/// 0.727, read from their OS/2 tables), a serif face less (Times New Roman,
+/// usvg's default family, 0.662).
+pub const DEFAULT_CAP_HEIGHT: f64 = 0.7;
 
 impl Default for ToSvgOptions {
     fn default() -> Self {
@@ -69,9 +83,14 @@ impl Default for ToSvgOptions {
             stroke_width: None,
             space: Space::Model,
             outlier_trim: true,
+            cap_height: DEFAULT_CAP_HEIGHT,
         }
     }
 }
+
+/// AutoCAD's single MTEXT line spacing: 5/3 of the text height from one
+/// baseline to the next, multiplied by the MTEXT's line spacing factor.
+const MTEXT_LINE_SPACING: f64 = 5.0 / 3.0;
 
 pub struct ToSvgResult {
     pub svg: String,
@@ -194,6 +213,9 @@ struct Ctx<'a> {
     part_truncated: bool,
     /// What the caps in [`crate::limits`] took away from this render.
     limits: LimitReport,
+    /// [`ToSvgOptions::cap_height`], checked: what a text height is divided
+    /// by to give the `font-size` it is written at.
+    cap_height: f64,
 }
 
 impl<'a> Ctx<'a> {
@@ -219,6 +241,7 @@ impl<'a> Ctx<'a> {
             entity_start: 0,
             part_truncated: false,
             limits: LimitReport::default(),
+            cap_height: DEFAULT_CAP_HEIGHT,
         }
     }
 
@@ -421,7 +444,10 @@ fn effective_text_height(stored: f64) -> f64 {
 }
 
 /// A single-line `<text>` at `at` -- TEXT, ATTRIB and TOLERANCE all render
-/// to this. `text` is what is shown, already decoded.
+/// to this. `text` is what is shown, already decoded; `height` is the CAD
+/// height, the height of the capitals, written as the `font-size` that
+/// makes the capitals that tall in a face whose capitals are `cap_height`
+/// of the em.
 fn text_element(
     at: Point2D,
     height: f64,
@@ -429,11 +455,12 @@ fn text_element(
     color: &str,
     text: &str,
     frame: Frame,
+    cap_height: f64,
 ) -> String {
-    let height = effective_text_height(height);
+    let font_size = effective_text_height(height) / cap_height;
     let (x, y) = (frame.x(at.x), frame.y(at.y));
     format!(
-        "<text x=\"{x}\" y=\"{y}\" font-size=\"{height}\" fill=\"{color}\" stroke=\"none\"{}>{}</text>",
+        "<text x=\"{x}\" y=\"{y}\" font-size=\"{font_size}\" fill=\"{color}\" stroke=\"none\"{}>{}</text>",
         rotate_transform_attr(rotation, x, y),
         escape_xml(text)
     )
@@ -1135,6 +1162,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 &color,
                 &decode_text(&t.text),
                 frame,
+                ctx.cap_height,
             ))
         }
         Entity::Attrib(a) => {
@@ -1149,6 +1177,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 &color,
                 &decode_text(&a.text),
                 frame,
+                ctx.cap_height,
             ))
         }
         Entity::Tolerance(t) => {
@@ -1169,6 +1198,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 &color,
                 &t.text_value,
                 frame,
+                ctx.cap_height,
             ))
         }
         Entity::MText(m) => {
@@ -1191,7 +1221,8 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             } else {
                 m.line_spacing_factor
             };
-            let line_height = text_height * line_spacing_factor * 1.2;
+            let line_height = text_height * line_spacing_factor * MTEXT_LINE_SPACING;
+            let font_size = text_height / ctx.cap_height;
             let (x, y) = (frame.x(m.insertion_point.x), frame.y(m.insertion_point.y));
             let (anchor, first_baseline) =
                 mtext_placement(m.attachment, y, text_height, line_height, lines.len());
@@ -1217,7 +1248,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 dy = 0.0;
             }
             Some(format!(
-                "<text x=\"{x}\" y=\"{first_baseline}\" font-size=\"{text_height}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
+                "<text x=\"{x}\" y=\"{first_baseline}\" font-size=\"{font_size}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
                 neg(m.rotation.to_degrees())
             ))
         }
@@ -1631,6 +1662,9 @@ pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
         ox: origin.x,
         oy: origin.y,
     };
+    if options.cap_height.is_finite() && options.cap_height > 0.0 {
+        ctx.cap_height = options.cap_height;
+    }
     for e in selected {
         ctx.reset_entity_bounds();
         ctx.entity_start = ctx.emitted;

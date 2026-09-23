@@ -39,11 +39,17 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **Invisible entities are not drawn**: an entity the drawing marks invisible (a dynamic
   block's hidden visibility states) is left out, and does not count towards the extent. A
   block reference whose block holds only such entities is reported in `empty_blocks`.
-- **MTEXT is placed by its attachment point**, one line per paragraph, with the line
-  height taken as 1.2 times the text height times the spacing factor -- an estimate, since
-  real line breaks and glyph metrics depend on the font. Where the drawing does not state
-  the attachment, the insertion point is used as the first line's baseline.
-
+- **MTEXT is placed by its attachment point**, one line per paragraph, with the lines 5/3
+  of the text height apart times the spacing factor (AutoCAD's single spacing) -- real line
+  breaks and glyph metrics depend on the font. Where the drawing does not state the
+  attachment, the insertion point is used as the first line's baseline.
+- **Text height is the height of the capitals, in an assumed face**: a text of height `h`
+  is written at `font-size = h / cap_height`, where `ToSvgOptions::cap_height` is the
+  capital height of the face it will be drawn in as a fraction of the em -- 0.7 by default,
+  typical of sans-serif faces (Arial 0.716, Segoe UI 0.700; Times New Roman, usvg's default
+  family, 0.662). The SVG names no font, so in a face whose ratio differs the capitals are
+  that much taller or shorter than the drawing says; a caller that draws with a face of its
+  own states its ratio.
 - **RAY and XLINE end at the edge of the picture**: a construction line has no end, so only
   its base point counts towards the extent, and the line is drawn dashed from edge to edge
   of the viewBox (grown by a percent of its diagonal) -- or not at all where it misses it.

@@ -17,7 +17,13 @@ useful than a gap -- but a reader should know which parts are approximate:
   not add up to a definition is drawn as its control polygon, which does not lie on the
   curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs; a mirrored ellipse -- normal
   (0, 0, -1) -- runs the other way. An ELLIPSE on a tilted plane is drawn through 64 points
-  of its outline seen from above.)
+  of its outline seen from above. A polyline's bulged segments are exact SVG arcs too, turning
+  the way the bulge's sign says; a bulge so small that its arc's radius reaches 1e15 units is
+  drawn as the straight segment it all but is.)
+- **Polyline widths are not drawn**: an LWPOLYLINE or POLYLINE_2D is drawn as its centreline
+  at the ordinary stroke, whatever its constant or per-vertex widths -- a wide border, a
+  tapered arrow and a DONUT's ring all come out as thin lines. The widths are in the model;
+  drawing a polyline as the filled outline its widths describe is not implemented.
 - **3DSOLID / REGION / POLYLINE_PFACE as wireframes**: the model carries a solid's edges
   only, and the renderer draws the lines. A body flat in a plane parallel to XY (a REGION
   is a closed 2D profile, so usually) is drawn in plan, where the file puts it; a body with
@@ -58,7 +64,8 @@ useful than a gap -- but a reader should know which parts are approximate:
   of the viewBox (grown by a percent of its diagonal) -- or not at all where it misses it.
 
 - **Extents are the drawn shape's own box**: an ARC counts its own box towards the picture's
-  extent, not its whole circle's, and an ELLIPSE arc the part that is drawn; a curved entity
+  extent, not its whole circle's, an ELLIPSE arc the part that is drawn, and a polyline its
+  vertices and each bulged segment's own arc; a curved entity
   inside a rotated block is measured through all four corners of its box, which contains it
   under any placement but is up to a factor of sqrt 2 larger at 45 degrees.
 

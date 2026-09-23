@@ -18,12 +18,14 @@
 //! Submodules hold the parts that stand on their own -- [`format`] (number and
 //! string formatting), [`hatch`] (HATCH fills), [`spline`] (SPLINE curves),
 //! [`infinite`] (RAY and XLINE, cut to the picture once the viewBox is
-//! known) and [`bounds`] (viewBox and outlier trim).
+//! known), [`polyline`] (the arcs a polyline's bulges describe) and
+//! [`bounds`] (viewBox and outlier trim).
 
 mod bounds;
 mod format;
 mod hatch;
 mod infinite;
+mod polyline;
 mod spline;
 
 use crate::color::{effective_layer, resolve_color, DEFAULT_COLOR};
@@ -990,7 +992,9 @@ fn numbers_are_real(e: &Entity) -> bool {
                 && is_sane_angle(el.start_angle)
                 && is_sane_angle(el.end_angle)
         }
-        Entity::LwPolyline(p) | Entity::Polyline2D(p) => p.vertices.iter().all(p2),
+        Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
+            p.vertices.iter().all(p2) && real(&p.bulges)
+        }
         Entity::Polyline3D(p) => p.vertices.iter().all(p3),
         Entity::Text(t) => p2(&t.start_point) && real(&[t.text_height, t.rotation]),
         Entity::Attrib(a) => p2(&a.start_point) && real(&[a.text_height, a.rotation]),
@@ -1245,8 +1249,17 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            ctx.consider_all(&p.vertices);
-            Some(polyline_element(&p.vertices, p.closed, &color, frame))
+            if p.bulges.iter().all(|b| *b == 0.0) {
+                ctx.consider_all(&p.vertices);
+                return Some(polyline_element(&p.vertices, p.closed, &color, frame));
+            }
+            Some(polyline::bulged_element(
+                &p.vertices,
+                &p.bulges,
+                p.closed,
+                &color,
+                ctx,
+            ))
         }
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {

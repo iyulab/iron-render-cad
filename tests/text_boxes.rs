@@ -321,3 +321,27 @@ fn a_sheet_lists_its_own_texts_and_the_models_it_shows() {
     assert!(svg.contains("<text id=\"t272.2304\""), "{svg}");
     assert!(!svg.contains("UNSEEN"), "{svg}");
 }
+
+#[test]
+fn a_text_nothing_of_which_is_drawn_is_not_listed() {
+    // A block reference scaled past the 1e15 units a picture can be built
+    // from is left out whole, and reported; the text inside it is not in
+    // the picture, so it is not among the scene's texts either.
+    let db = db(
+        vec![
+            text(0x10, (0.0, 0.0), 2.5, "HERE"),
+            insert(0x20, "B", (0.0, 0.0), 1e16),
+        ],
+        vec![("B", vec![text(0x21, (1.0, 1.0), 2.5, "GONE")])],
+    );
+    let scene = Scene::new(&db, all());
+    assert!(
+        scene.limits.out_of_range_entities == 1,
+        "{:?}",
+        scene.limits
+    );
+    let boxes = scene
+        .text_boxes(&Fonts::Custom(Vec::new()))
+        .expect("laid out");
+    assert_eq!(paths(&boxes), [vec![0x10]]);
+}

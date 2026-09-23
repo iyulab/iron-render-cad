@@ -2406,6 +2406,7 @@ fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<(Part, String)> {
         ctx.reset_entity_bounds();
         ctx.entity_start = ctx.emitted;
         ctx.part_truncated = false;
+        let texts_before = ctx.texts.len();
         let svg = render_entity(e, ctx);
         let extent = ctx.entity_box();
         let mut part = Part {
@@ -2424,6 +2425,8 @@ fn walk(selected: &[&Entity], ctx: &mut Ctx) -> Vec<(Part, String)> {
             ctx.limits.out_of_range_entities += 1;
             ctx.limits
                 .note(Cap::OutOfRange, e.common().id, e.type_name());
+            // Nothing of it is drawn, so neither are the texts it drew.
+            ctx.texts.truncate(texts_before);
             part.extent = None;
             parts.push((part, String::new()));
             continue;

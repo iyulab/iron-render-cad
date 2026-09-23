@@ -31,8 +31,8 @@ use format::{clean, escape_xml, neg, points_attr, rotate_transform_attr, xy};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
-    ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, LightType, MLineVertex,
-    MTextAttachment, Point2D, Point3D, PolylineVertex,
+    ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, LightType,
+    LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D, PolylineVertex,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase};
@@ -418,6 +418,54 @@ fn on_circle(center: Point3D, radius: f64, angle: f64) -> Point3D {
     }
 }
 
+/// A polyline in the world's plane: a `<polyline>` or `<polygon>` when every
+/// segment is straight, a `<path>` with exact arcs otherwise.
+fn polyline_drawn(vertices: &[PolylineVertex], closed: bool, color: &str, ctx: &mut Ctx) -> String {
+    let points: Vec<Point2D> = vertices.iter().map(|v| v.point).collect();
+    ctx.consider_all(&points);
+    if vertices.iter().all(|v| v.bulge == 0.0) {
+        return polyline_element(&points, closed, color);
+    }
+    bulged_polyline_element(vertices, closed, color, ctx)
+}
+
+/// A polyline on a tilted plane, seen from above: its arcs sampled in its
+/// own coordinate system, then every point taken to the world.
+fn polyline_on_tilted_plane(
+    p: &LwPolylineEntity,
+    plane: ocs::Ocs,
+    color: &str,
+    ctx: &mut Ctx,
+) -> String {
+    let mut own: Vec<Point2D> = Vec::new();
+    for (from, _, arc) in bulge::segments(&p.vertices, p.closed) {
+        own.push(from);
+        if let Some(arc) = arc {
+            let steps = 12;
+            own.extend(
+                (1..steps).map(|i| {
+                    arc.at(arc.start_angle + arc.sweep * (f64::from(i) / f64::from(steps)))
+                }),
+            );
+        }
+    }
+    if !p.closed || own.is_empty() {
+        own.extend(p.vertices.last().map(|v| v.point));
+    }
+    let world: Vec<Point2D> = own
+        .into_iter()
+        .map(|q| {
+            plane.to_world_xy(Point3D {
+                x: q.x,
+                y: q.y,
+                z: p.elevation,
+            })
+        })
+        .collect();
+    ctx.consider_all(&world);
+    polyline_element(&world, p.closed, color)
+}
+
 /// A polyline with arc segments, as a `<path>`: a straight segment is a line,
 /// a bulged one an exact SVG arc. The arcs' extreme points join the bounds,
 /// since an arc reaches past its two ends.
@@ -786,12 +834,28 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ))
         }
         Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            let points: Vec<Point2D> = p.vertices.iter().map(|v| v.point).collect();
-            ctx.consider_all(&points);
-            if p.vertices.iter().all(|v| v.bulge == 0.0) {
-                return Some(polyline_element(&points, p.closed, &color));
+            let plane = own_plane(p.extrusion);
+            if plane.is_world() {
+                return Some(polyline_drawn(&p.vertices, p.closed, &color, ctx));
             }
-            Some(bulged_polyline_element(&p.vertices, p.closed, &color, ctx))
+            if plane.flat() {
+                // A mirror copy: its vertices taken to the world, and every
+                // arc turning the other way there.
+                let world: Vec<PolylineVertex> = p
+                    .vertices
+                    .iter()
+                    .map(|v| PolylineVertex {
+                        point: plane.to_world_xy(Point3D {
+                            x: v.point.x,
+                            y: v.point.y,
+                            z: p.elevation,
+                        }),
+                        bulge: -v.bulge,
+                    })
+                    .collect();
+                return Some(polyline_drawn(&world, p.closed, &color, ctx));
+            }
+            Some(polyline_on_tilted_plane(p, plane, &color, ctx))
         }
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {
@@ -1492,7 +1556,6 @@ mod tests {
     }
 
     fn polyline(vertices: &[(f64, f64, f64)], closed: bool) -> Entity {
-        use uncad_model::model::LwPolylineEntity;
         Entity::LwPolyline(LwPolylineEntity {
             common: plain_common(),
             vertices: vertices
@@ -1503,6 +1566,12 @@ mod tests {
                 })
                 .collect(),
             closed,
+            elevation: 0.0,
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         })
     }
 
@@ -1590,6 +1659,28 @@ mod tests {
             y: 0.0,
             z: -1.0,
         }
+    }
+
+    #[test]
+    fn a_mirrored_polyline_has_its_vertices_and_arcs_taken_to_the_world() {
+        // Written at (-2, 0) -> (0, 0) with bulge 1 (counter-clockwise in its
+        // own system, so below that chord) in a mirror copy's system: in the
+        // world it runs (2, 0) -> (0, 0) and the half circle still lies below
+        // -- the arc turns the other way, so the page's sweep flag is 1.
+        let mut e = polyline(&[(-2.0, 0.0, 1.0), (0.0, 0.0, 0.0)], false);
+        if let Entity::LwPolyline(p) = &mut e {
+            p.extrusion = mirrored();
+        }
+        let svg = render_one(e);
+        let cmds = path_commands(&svg);
+        assert_eq!(cmds[0], ("M".to_string(), vec![2.0, 0.0]), "{svg}");
+        assert_eq!(
+            cmds[1],
+            ("A".to_string(), vec![1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]),
+            "{svg}"
+        );
+        let [_, y, _, h] = view_box(&svg);
+        assert!(y <= 0.0 && y + h >= 1.0, "the arc reaches y = -1: {svg}");
     }
 
     #[test]

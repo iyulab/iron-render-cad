@@ -179,6 +179,11 @@ fn an_xline_inside_a_placed_block_is_cut_in_the_documents_frame() {
         },
         rotation: std::f64::consts::FRAC_PI_2,
         attribs: Vec::new(),
+        extrusion: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     }));
     let result = to_svg(&db(entities, blocks), all());
 

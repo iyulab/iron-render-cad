@@ -50,6 +50,11 @@ fn insert(id: u64, layer: &str, block: &str) -> Entity {
         },
         rotation: 0.0,
         attribs: Vec::new(),
+        extrusion: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     })
 }
 
@@ -64,6 +69,12 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
             LayerRecord {
                 name: name.to_string(),
                 color_index,
+                off: false,
+                frozen: false,
+                locked: false,
+                plot: None,
+                lineweight: None,
+                linetype: uncad_model::Ref::Absent,
             },
         );
     }

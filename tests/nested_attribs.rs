@@ -46,6 +46,11 @@ fn insert(id: u64, block: &str, at: (f64, f64), attribs: Vec<AttribEntity>) -> E
         },
         rotation: 0.0,
         attribs,
+        extrusion: uncad_model::Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     })
 }
 
@@ -57,6 +62,19 @@ fn tag_value() -> AttribEntity {
         tag: "TAG".to_string(),
         text: "D-101".to_string(),
         rotation: 0.0,
+        flags: Default::default(),
+        horizontal_justification: Default::default(),
+        vertical_justification: Default::default(),
+        alignment_point: None,
+        width_factor: 1.0,
+        oblique_angle: 0.0,
+        style_name: uncad_model::Ref::Absent,
+        elevation: 0.0,
+        extrusion: uncad_model::Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     }
 }
 
@@ -84,6 +102,11 @@ fn drawing(dxf_shape: bool) -> CadDatabase {
                 common: common(0x70),
                 center: xyz(0.0, 0.0),
                 radius: 1.0,
+                extrusion: uncad_model::Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
             })],
         },
     );

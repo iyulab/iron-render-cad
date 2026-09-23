@@ -31,6 +31,18 @@ fn text(raw: &str, height: f64) -> Entity {
         text_height: height,
         text: raw.to_string(),
         rotation: 0.0,
+        horizontal_justification: Default::default(),
+        vertical_justification: Default::default(),
+        alignment_point: None,
+        width_factor: 1.0,
+        oblique_angle: 0.0,
+        style_name: uncad_model::Ref::Absent,
+        elevation: 0.0,
+        extrusion: uncad_model::Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     })
 }
 
@@ -47,6 +59,10 @@ fn mtext(raw: &str, attachment: Option<MTextAttachment>) -> Entity {
         rotation: 0.0,
         line_spacing_factor: 1.0,
         attachment,
+        rect_width: 0.0,
+        extents_width: None,
+        extents_height: None,
+        style_name: uncad_model::Ref::Absent,
     })
 }
 

@@ -920,9 +920,10 @@ fn drawn_point_count(e: &Entity, tables: &Tables) -> usize {
             l.vertices.len().saturating_mul(lines)
         }
         Entity::Wipeout(w) => w.boundary.len(),
-        Entity::Solid3D(s) | Entity::Region(s) | Entity::PolylinePFace(s) => {
-            s.wireframe_edges.len()
-        }
+        Entity::Solid3D(s)
+        | Entity::Region(s)
+        | Entity::PolylinePFace(s)
+        | Entity::PolylineMesh(s) => s.wireframe_edges.len(),
         Entity::Hatch(h) => {
             let boundary: usize = h
                 .boundary_paths
@@ -1010,9 +1011,10 @@ fn numbers_are_real(e: &Entity) -> bool {
         Entity::Viewport(v) => p3(&v.center) && real(&[v.width, v.height]),
         Entity::Wipeout(w) => w.boundary.iter().all(p2),
         Entity::Spline(s) => s.fit_points.iter().all(p3) && s.control_points.iter().all(p3),
-        Entity::Solid3D(s) | Entity::Region(s) | Entity::PolylinePFace(s) => {
-            s.wireframe_edges.iter().all(|[a, b]| xyz(a) && xyz(b))
-        }
+        Entity::Solid3D(s)
+        | Entity::Region(s)
+        | Entity::PolylinePFace(s)
+        | Entity::PolylineMesh(s) => s.wireframe_edges.iter().all(|[a, b]| xyz(a) && xyz(b)),
         Entity::Hatch(h) => h.boundary_paths.iter().all(|path| match path {
             HatchBoundaryPath::Polyline(v) => v.iter().all(p2),
             HatchBoundaryPath::Edges(edges) => edges.iter().all(|edge| match edge {
@@ -1508,6 +1510,9 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         Entity::PolylinePFace(p) => {
             render_wireframe_entity(&p.wireframe_edges, "POLYLINE_PFACE", &color, ctx)
         }
+        Entity::PolylineMesh(p) => {
+            render_wireframe_entity(&p.wireframe_edges, "POLYLINE_MESH", &color, ctx)
+        }
         Entity::Hatch(h) => hatch::render_hatch(h, h.common.id, &color, ctx),
         Entity::Leader(l) => {
             if l.vertices.is_empty() {
@@ -1703,9 +1708,10 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
         Entity::Viewport(v) => p3(&v.center),
         Entity::Wipeout(w) => *w.boundary.first()?,
         Entity::Spline(s) => p3(s.fit_points.first().or(s.control_points.first())?),
-        Entity::Solid3D(s) | Entity::Region(s) | Entity::PolylinePFace(s) => {
-            p3(&s.wireframe_edges.first()?[0])
-        }
+        Entity::Solid3D(s)
+        | Entity::Region(s)
+        | Entity::PolylinePFace(s)
+        | Entity::PolylineMesh(s) => p3(&s.wireframe_edges.first()?[0]),
         Entity::Hatch(h) => match h.boundary_paths.first()? {
             HatchBoundaryPath::Polyline(v) => *v.first()?,
             HatchBoundaryPath::Edges(edges) => match edges.first()? {
@@ -1958,6 +1964,11 @@ mod tests {
                     },
                     rotation: 0.0,
                     attribs: Vec::new(),
+                    extrusion: Point3D {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
                 })
             })
             .collect();
@@ -1990,6 +2001,11 @@ mod tests {
             },
             rotation: 0.0,
             attribs: Vec::new(),
+            extrusion: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
         });
         let svg = render_block_ref(
             &owner,

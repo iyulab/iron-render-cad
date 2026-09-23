@@ -121,6 +121,12 @@ mod tests {
             LayerRecord {
                 name: name.to_string(),
                 color_index,
+                off: false,
+                frozen: false,
+                locked: false,
+                plot: None,
+                lineweight: None,
+                linetype: uncad_model::Ref::Absent,
             },
         );
         Tables {

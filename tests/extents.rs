@@ -42,6 +42,11 @@ fn arc(id: u64, start: f64, end: f64) -> Entity {
         radius: 10.0,
         start_angle: start,
         end_angle: end,
+        extrusion: uncad_model::Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     })
 }
 
@@ -189,6 +194,11 @@ fn a_circle_in_a_rotated_block_counts_all_of_itself() {
                 common: common(0x50),
                 center: xyz(0.0, 0.0, 0.0),
                 radius: 1.0,
+                extrusion: uncad_model::Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
             })],
         },
     );
@@ -199,6 +209,11 @@ fn a_circle_in_a_rotated_block_counts_all_of_itself() {
         scale: xyz(1.0, 1.0, 1.0),
         rotation: FRAC_PI_4,
         attribs: Vec::new(),
+        extrusion: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     });
     let [min_x, min_y, max_x, max_y] = extent(vec![insert], blocks);
     // The turned box is a diamond reaching sqrt 2 from the centre: it

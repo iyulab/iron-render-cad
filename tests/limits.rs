@@ -68,6 +68,11 @@ fn insert(id: u64, block: &str, x: f64) -> Entity {
         },
         rotation: 0.0,
         attribs: Vec::new(),
+        extrusion: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     })
 }
 
@@ -247,6 +252,15 @@ fn a_polyline_with_more_vertices_than_the_cap_is_left_out_whole() {
         common: common(0x20),
         vertices,
         closed: false,
+        bulges: Vec::new(),
+        widths: Vec::new(),
+        const_width: 0.0,
+        elevation: 0.0,
+        extrusion: uncad_model::Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     });
     let drawing = db(vec![huge, line(0x21, 0.0, 0.0)], Vec::new());
 
@@ -264,6 +278,15 @@ fn a_polyline_with_more_vertices_than_the_cap_is_left_out_whole() {
         common: common(0x20),
         vertices,
         closed: false,
+        bulges: Vec::new(),
+        widths: Vec::new(),
+        const_width: 0.0,
+        elevation: 0.0,
+        extrusion: uncad_model::Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
     });
     let result = to_svg(&db(vec![fits], Vec::new()), all());
     assert!(result.svg.contains("<polyline"));
@@ -347,6 +370,11 @@ fn an_entity_reaching_absurdly_far_does_not_take_the_viewbox_with_it() {
                 common: common(0x42),
                 center: xyz(5.0, 5.0),
                 radius: 1e16,
+                extrusion: uncad_model::Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
             }),
         ],
         Vec::new(),

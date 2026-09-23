@@ -69,6 +69,11 @@ fn a_non_finite_coordinate_never_reaches_an_svg_attribute() {
                 common: common(0x13),
                 center: xyz(0.0, 0.0),
                 radius: inf,
+                extrusion: uncad_model::Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
             }),
             Entity::Text(TextEntity {
                 common: common(0x14),
@@ -76,6 +81,18 @@ fn a_non_finite_coordinate_never_reaches_an_svg_attribute() {
                 text_height: 2.5,
                 text: "LOST".to_string(),
                 rotation: 0.0,
+                horizontal_justification: Default::default(),
+                vertical_justification: Default::default(),
+                alignment_point: None,
+                width_factor: 1.0,
+                oblique_angle: 0.0,
+                style_name: uncad_model::Ref::Absent,
+                elevation: 0.0,
+                extrusion: uncad_model::Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
             }),
             // A block reference whose placement is not a number: nothing
             // drawn under it would land anywhere.
@@ -90,6 +107,11 @@ fn a_non_finite_coordinate_never_reaches_an_svg_attribute() {
                 },
                 rotation: 0.0,
                 attribs: Vec::new(),
+                extrusion: uncad_model::Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
             }),
         ],
         tables: Tables {

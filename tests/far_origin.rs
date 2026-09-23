@@ -92,6 +92,11 @@ fn far_drawing() -> CadDatabase {
                 },
                 rotation: 0.0,
                 attribs: Vec::new(),
+                extrusion: Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
             }),
             Entity::Dimension(DimensionEntity {
                 common: common(0x12),
@@ -108,6 +113,7 @@ fn far_drawing() -> CadDatabase {
                 rotation: 0.0,
                 text_rotation: 0.0,
                 style_name: Ref::Absent,
+                ordinate_axis: None,
             }),
         ],
         tables: Tables {

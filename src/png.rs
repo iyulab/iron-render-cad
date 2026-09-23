@@ -12,7 +12,7 @@
 use crate::svg::{to_svg, ToSvgOptions};
 use resvg::tiny_skia;
 use resvg::usvg::{self, fontdb};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use uncad_model::CadDatabase;
 
 /// The largest either side of an image may be unless a caller says
@@ -21,7 +21,7 @@ use uncad_model::CadDatabase;
 /// allows is 8192 x 8192 x 4 = 256 MiB of pixels.
 pub const DEFAULT_MAX_EDGE: u32 = 8192;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToPngOptions {
     pub svg: ToSvgOptions,
     /// Multiplies the SVG's own viewBox-derived pixel size -- e.g. `2.0`
@@ -33,6 +33,8 @@ pub struct ToPngOptions {
     /// without a bound a file decides how much memory a render asks for.
     /// Default [`DEFAULT_MAX_EDGE`].
     pub max_edge: u32,
+    /// The fonts text is drawn with. Default [`Fonts::System`].
+    pub fonts: Fonts,
 }
 
 impl Default for ToPngOptions {
@@ -41,6 +43,89 @@ impl Default for ToPngOptions {
             svg: ToSvgOptions::default(),
             scale: 1.0,
             max_edge: DEFAULT_MAX_EDGE,
+            fonts: Fonts::default(),
+        }
+    }
+}
+
+/// Which fonts a PNG's `<text>` is drawn with. The SVG itself names no
+/// font; this is where the face is chosen.
+#[derive(Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Fonts {
+    /// The host's installed fonts, found on the first call in a process and
+    /// shared by every later one (scanning them is the slow part of a small
+    /// render). Text is drawn in usvg's default family, or whatever the host
+    /// substitutes for it; a host with no matching font draws `<text>` blank
+    /// rather than failing.
+    #[default]
+    System,
+    /// These fonts and no others -- nothing from the host, so the same
+    /// drawing gives the same picture everywhere. Each is the bytes of an
+    /// OpenType or TrueType file (a collection contributes every face in
+    /// it); text is drawn in the family of the first face that loads. A
+    /// character none of them has is drawn as the face's missing-glyph
+    /// shape. This crate bundles no font of its own: a caller that ships
+    /// one hands it over here, and states its capital height in
+    /// [`ToSvgOptions::cap_height`].
+    Custom(Vec<Arc<[u8]>>),
+}
+
+impl std::fmt::Debug for Fonts {
+    /// The sizes of custom fonts, not their bytes.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Fonts::System => write!(f, "System"),
+            Fonts::Custom(files) => f
+                .debug_tuple("Custom")
+                .field(&files.iter().map(|b| b.len()).collect::<Vec<_>>())
+                .finish(),
+        }
+    }
+}
+
+/// The usvg options that draw text with `fonts`.
+///
+/// The host's fonts are scanned once per process and the database is
+/// shared from then on; custom fonts are parsed per call, which for a file
+/// or two is cheap.
+fn usvg_options(fonts: &Fonts) -> usvg::Options<'static> {
+    static SYSTEM: OnceLock<Arc<fontdb::Database>> = OnceLock::new();
+    match fonts {
+        Fonts::System => usvg::Options {
+            fontdb: SYSTEM
+                .get_or_init(|| {
+                    let mut db = fontdb::Database::new();
+                    db.load_system_fonts();
+                    Arc::new(db)
+                })
+                .clone(),
+            ..Default::default()
+        },
+        Fonts::Custom(files) => {
+            let mut db = fontdb::Database::new();
+            let mut family = None;
+            for bytes in files {
+                let source = fontdb::Source::Binary(Arc::new(bytes.clone()));
+                for id in db.load_font_source(source) {
+                    if family.is_none() {
+                        family = db
+                            .face(id)
+                            .and_then(|face| face.families.first())
+                            .map(|(name, _)| name.clone());
+                    }
+                }
+            }
+            let mut options = usvg::Options::default();
+            if let Some(family) = family {
+                // Text names no family, so it asks for the default one; the
+                // generic families are what usvg falls back to.
+                db.set_serif_family(family.clone());
+                db.set_sans_serif_family(family.clone());
+                options.font_family = family;
+            }
+            options.fontdb = Arc::new(db);
+            options
         }
     }
 }
@@ -119,7 +204,12 @@ impl std::error::Error for PngError {}
 /// failure.
 pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, PngError> {
     let svg_result = to_svg(db, options.svg);
-    let png = rasterize(&svg_result.svg, options.scale, options.max_edge)?;
+    let png = rasterize(
+        &svg_result.svg,
+        options.scale,
+        options.max_edge,
+        &options.fonts,
+    )?;
     Ok(ToPngResult {
         png,
         unsupported_types: svg_result.unsupported_types,
@@ -137,8 +227,9 @@ pub fn to_png(db: &CadDatabase, options: ToPngOptions) -> Result<ToPngResult, Pn
 ///
 /// Neither side of the image may exceed [`DEFAULT_MAX_EDGE`] pixels; a
 /// larger request fails with [`PngError::TooLarge`] instead of allocating.
+/// Text is drawn with the host's fonts ([`Fonts::System`]).
 pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, PngError> {
-    rasterize(svg, scale, DEFAULT_MAX_EDGE)
+    rasterize(svg, scale, DEFAULT_MAX_EDGE, &Fonts::System)
 }
 
 /// [`svg_to_png`] with an explicit bound on the image's sides.
@@ -147,15 +238,8 @@ pub fn svg_to_png(svg: &str, scale: f32) -> Result<Vec<u8>, PngError> {
 /// cannot fail gracefully (tiny-skia allocates it with `vec!`, and a request
 /// the allocator refuses aborts the process), so a size nobody should
 /// allocate has to be refused before asking.
-fn rasterize(svg: &str, scale: f32, max_edge: u32) -> Result<Vec<u8>, PngError> {
-    let mut db = fontdb::Database::new();
-    db.load_system_fonts();
-
-    let opt = usvg::Options {
-        fontdb: Arc::new(db),
-        ..Default::default()
-    };
-    let tree = usvg::Tree::from_str(svg, &opt).map_err(PngError::InvalidSvg)?;
+fn rasterize(svg: &str, scale: f32, max_edge: u32, fonts: &Fonts) -> Result<Vec<u8>, PngError> {
+    let tree = usvg::Tree::from_str(svg, &usvg_options(fonts)).map_err(PngError::InvalidSvg)?;
 
     let size = tree.size();
     let width = (size.width() * scale).round() as u32;
@@ -250,9 +334,9 @@ mod tests {
         }
         // Exactly at the bound is allowed, one pixel over is not.
         let edge = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 10"></svg>"#;
-        assert!(rasterize(edge, 1.0, 30).is_ok());
+        assert!(rasterize(edge, 1.0, 30, &Fonts::System).is_ok());
         assert!(matches!(
-            rasterize(edge, 1.0, 29),
+            rasterize(edge, 1.0, 29, &Fonts::System),
             Err(PngError::TooLarge {
                 width: 30,
                 height: 10,
@@ -289,7 +373,9 @@ mod tests {
             },
             ..ToPngOptions::default()
         };
-        let err = to_png(&db, options).err().expect("too large to rasterize");
+        let err = to_png(&db, options.clone())
+            .err()
+            .expect("too large to rasterize");
         assert!(matches!(err, PngError::TooLarge { .. }), "{err}");
         // A caller who asks for fewer pixels a unit gets the image.
         let small = ToPngOptions {
@@ -324,6 +410,63 @@ mod tests {
             matches!(result, Ok(_) | Err(PngError::RenderPanic(_))),
             "{:?}",
             result.map(|png| png.len())
+        );
+    }
+
+    #[test]
+    fn the_hosts_fonts_are_scanned_once_per_process() {
+        let first = usvg_options(&Fonts::System).fontdb;
+        let second = usvg_options(&Fonts::System).fontdb;
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn custom_fonts_are_the_only_fonts() {
+        // Nothing from the host: no bytes, no faces.
+        let none = usvg_options(&Fonts::Custom(Vec::new()));
+        assert_eq!(none.fontdb.len(), 0);
+        // Bytes that are not a font load nothing and fail nothing.
+        let junk: Arc<[u8]> = Arc::from(&b"not a font"[..]);
+        let junk = usvg_options(&Fonts::Custom(vec![junk]));
+        assert_eq!(junk.fontdb.len(), 0);
+        // A text drawn with no font at all is a blank, not an error.
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 10"><text x="0" y="8" font-size="8">ABC</text></svg>"#;
+        assert!(rasterize(svg, 1.0, 100, &Fonts::Custom(Vec::new())).is_ok());
+        // The bytes are not in the options' debug text.
+        assert_eq!(
+            format!("{:?}", Fonts::Custom(vec![Arc::from(&[0u8; 5][..])])),
+            "Custom([5])"
+        );
+    }
+
+    #[test]
+    fn text_is_drawn_in_the_family_of_the_first_custom_face() {
+        // Needs a real font file, which this crate does not ship; the
+        // well-known locations of one on each CI host are tried in turn.
+        let Some(bytes) = [
+            "C:/Windows/Fonts/arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+        ]
+        .iter()
+        .find_map(|path| std::fs::read(path).ok()) else {
+            eprintln!("no font file found on this host; nothing to check");
+            return;
+        };
+        let options = usvg_options(&Fonts::Custom(vec![Arc::from(bytes)]));
+        assert_eq!(options.fontdb.len(), 1);
+        let face = options.fontdb.faces().next().expect("one face");
+        assert_eq!(options.font_family, face.families[0].0);
+        // A `<text>` naming no family resolves to that face: usvg turns the
+        // text into glyph outlines, which it can only do with a face.
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 10"><text x="0" y="8" font-size="8">ABC</text></svg>"#;
+        let tree = usvg::Tree::from_str(svg, &options).expect("parses");
+        let usvg::Node::Text(text) = &tree.root().children()[0] else {
+            panic!("a text node")
+        };
+        assert!(
+            !text.flattened().children().is_empty(),
+            "the text was shaped with the custom face"
         );
     }
 

@@ -201,9 +201,14 @@ as `PngError::RenderPanic` with its message; no image is produced for that call.
 
 ## Fonts
 
-PNG rasterization loads the host's installed system fonts on every call and bundles none
-of its own. A host with no matching font renders `<text>` elements (dimension and MTEXT
-labels) as blank rather than failing -- an unresolved glyph is empty, not an error.
+The crate bundles no font. By default (`Fonts::System`) PNG rasterization draws text with
+the host's installed fonts, scanned once per process and shared by every later call, so
+the picture depends on the host; a host with no matching font renders `<text>` elements
+(dimension and MTEXT labels) as blank rather than failing -- an unresolved glyph is empty,
+not an error. A caller can hand over font files instead (`Fonts::Custom`): then those are
+the only fonts, text is drawn in the family of the first face, and the picture no longer
+depends on the host. The caller then also states that face's capital height
+(`ToSvgOptions::cap_height`).
 
 ## No image comparison, by design
 

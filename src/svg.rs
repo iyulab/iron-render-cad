@@ -22,12 +22,11 @@ mod bulge;
 mod format;
 mod hatch;
 mod spline;
+mod text_codes;
 
 use crate::color::{resolve_color, DEFAULT_COLOR};
 use bounds::{dominant_cluster_box, Box2D};
-use format::{
-    clean, escape_xml, neg, points_attr, rotate_transform_attr, strip_mtext_formatting, xy,
-};
+use format::{clean, escape_xml, neg, points_attr, rotate_transform_attr, xy};
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{
@@ -708,7 +707,7 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 t.text_height,
                 t.rotation,
                 &color,
-                &t.text,
+                &text_codes::decode(&t.text, false),
             ))
         }
         Entity::Attrib(a) => {
@@ -721,7 +720,7 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 a.text_height,
                 a.rotation,
                 &color,
-                &a.text,
+                &text_codes::decode(&a.text, false),
             ))
         }
         Entity::Tolerance(t) => {
@@ -745,7 +744,7 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::MText(m) => {
             ctx.consider(m.insertion_point.x, m.insertion_point.y);
-            let stripped = strip_mtext_formatting(&m.text);
+            let stripped = text_codes::decode(&m.text, true);
             let lines: Vec<&str> = stripped.lines().filter(|l| !l.is_empty()).collect();
             if lines.is_empty() {
                 return Some(String::new());

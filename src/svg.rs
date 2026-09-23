@@ -953,7 +953,20 @@ fn render_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         }
         Entity::Solid(s) | Entity::Trace(s) => {
             // Classic AutoCAD SOLID/TRACE vertex order is 1-2-4-3, not 1-2-3-4.
-            let pts = [s.corner1, s.corner2, s.corner4, s.corner3];
+            let mut pts = [s.corner1, s.corner2, s.corner4, s.corner3];
+            let plane = own_plane(s.extrusion);
+            if !plane.is_world() {
+                // Written in its own plane: each corner taken to the world.
+                // A quadrilateral of straight edges stays one seen from
+                // above, so this is exact on a tilted plane too.
+                for p in &mut pts {
+                    *p = plane.to_world_xy(Point3D {
+                        x: p.x,
+                        y: p.y,
+                        z: s.elevation,
+                    });
+                }
+            }
             ctx.consider_all(&pts);
             Some(format!(
                 "<polygon points=\"{}\" fill=\"{color}\" fill-opacity=\"0.6\" stroke=\"none\"/>",
@@ -1686,6 +1699,23 @@ mod tests {
             y: 0.0,
             z: -1.0,
         }
+    }
+
+    #[test]
+    fn a_mirrored_solid_has_its_corners_taken_to_the_world() {
+        use uncad_model::model::SolidEntity;
+        let c = |x, y| Point2D { x, y };
+        let svg = render_one(Entity::Solid(SolidEntity {
+            common: plain_common(),
+            corner1: c(-1.0, 0.0),
+            corner2: c(-3.0, 0.0),
+            corner3: c(-1.0, 2.0),
+            corner4: c(-3.0, 2.0),
+            elevation: 5.0,
+            extrusion: mirrored(),
+        }));
+        // 1-2-4-3, each x reversed; the page flips y.
+        assert!(svg.contains("points=\"1,0 3,0 3,-2 1,-2\""), "{svg}");
     }
 
     fn face(invisible_edges: [bool; 4]) -> Entity {

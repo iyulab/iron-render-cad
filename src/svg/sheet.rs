@@ -461,6 +461,11 @@ mod tests {
             limits_min: limits.0,
             limits_max: limits.1,
             plot_settings: plot,
+            paper_space_linetype_scaling: true,
+            limits_check: false,
+            extents_min: None,
+            extents_max: None,
+            active_viewport: Ref::Absent,
         }
     }
 

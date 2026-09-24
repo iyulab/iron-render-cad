@@ -358,13 +358,14 @@ fn shows(vp: &ViewportEntity) -> Shows {
 
 /// Whether `vp` is its layout's overall viewport: the one that is the sheet
 /// as paper space shows it, not a window onto the model. The DXF numbers it
-/// 1; the binary format stores no number, so there it is the viewport whose
-/// view is itself -- as tall as its frame, centred on the frame's centre,
-/// untwisted.
+/// 1; the binary format stores no number, and a DXF from R2000 on writes 0
+/// for every viewport of a layout that is not the current one -- no number
+/// either. Without one it is the viewport whose view is itself -- as tall as
+/// its frame, centred on the frame's centre, untwisted.
 fn is_overall(vp: &ViewportEntity) -> bool {
     match vp.viewport_id {
-        Some(id) => id == 1,
-        None => vp.view.is_some_and(|view| {
+        Some(id) if id > 0 => id == 1,
+        _ => vp.view.is_some_and(|view| {
             let tol = 1e-6 * vp.height.abs().max(1.0);
             (view.height - vp.height).abs() < tol
                 && (view.center.x - vp.center.x).abs() < tol
@@ -608,6 +609,13 @@ mod tests {
         let own = view(p(150.0, 100.0), 120.0, 0.0);
         assert!(is_overall(&viewport(Some(1), Some(own))));
         assert!(!is_overall(&viewport(Some(2), Some(own))));
+        // Numbered 0 (every viewport of a DXF layout that is not current):
+        // no number, so again the viewport whose view is its own frame.
+        assert!(is_overall(&viewport(Some(0), Some(own))));
+        assert!(!is_overall(&viewport(
+            Some(0),
+            Some(view(p(150.0, 100.0), 60.0, 0.0))
+        )));
         // No number (a DWG): the viewport whose view is its own frame.
         assert!(is_overall(&viewport(None, Some(own))));
         assert!(!is_overall(&viewport(

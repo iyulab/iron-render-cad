@@ -141,6 +141,36 @@ fn a_binary_files_overall_viewport_is_found_by_its_view() {
 }
 
 #[test]
+fn an_inactive_layouts_overall_viewport_is_found_by_its_view() {
+    // A DXF from R2000 on writes group 69 as 0 for every viewport of a
+    // layout that is not the current one: 0 is no number, so the overall
+    // viewport is again the one whose view is its own frame -- not a window
+    // onto the model, which would draw the model over the whole sheet.
+    let mut db = g14();
+    for e in &mut db
+        .tables
+        .block_records
+        .get_mut("*Paper_Space")
+        .expect("paper space")
+        .entities
+    {
+        if let Entity::Viewport(v) = e {
+            v.viewport_id = Some(0);
+        }
+    }
+    let result = layout_to_svg(&db, "Layout1", ToSvgOptions::default()).expect("a sheet");
+    let overall: Vec<u64> = result
+        .viewports
+        .iter()
+        .filter(|r| r.overall)
+        .map(|r| r.id.value())
+        .collect();
+    assert_eq!(overall, [271]);
+    let vp = by_id(&result.viewports, 271);
+    assert!(vp.model_to_paper.is_none() && vp.model_window.is_none());
+}
+
+#[test]
 fn the_sheet_says_where_its_paper_comes_from() {
     let mut db = g14();
     // No limits: the paper from the plot settings -- A3 stated portrait,

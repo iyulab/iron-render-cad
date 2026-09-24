@@ -1605,6 +1605,8 @@ fn numbers_are_real(e: &Entity) -> bool {
                 && l.scale.is_none_or(f64::is_finite)
         }
         Entity::Light(l) => p3(&l.position) && p3(&l.target),
+        // Not drawn (see `render_entity`), so nothing of it reaches a frame.
+        Entity::Image(_) => true,
         Entity::Dimension(_) | Entity::Attdef(_) | Entity::Unknown { .. } => true,
     }
 }
@@ -2326,6 +2328,12 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.unsupported.insert("ATTDEF".to_string());
             None
         }
+        // The raster file is not part of the drawing, and its frame is not
+        // drawn yet: reported like a type this renderer does not know.
+        Entity::Image(_) => {
+            ctx.unsupported.insert("IMAGE".to_string());
+            None
+        }
         Entity::Unknown { type_name, .. } => {
             ctx.unsupported.insert(type_name.clone());
             None
@@ -2454,7 +2462,7 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
         Entity::MultiLeader(m) => p3(m.lines.first()?.first()?),
         Entity::MLine(l) => p3(&l.vertices.first()?.point),
         Entity::Light(l) => p3(&l.position),
-        Entity::Unknown { .. } => return None,
+        Entity::Image(_) | Entity::Unknown { .. } => return None,
     })
 }
 

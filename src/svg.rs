@@ -56,8 +56,8 @@ use std::fmt::Write as _;
 use uncad_model::bulge::{self, BulgeArc, Segment};
 use uncad_model::model::{
     ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath,
-    HatchEdge, LightType, LwPolylineEntity, MLineVertex, MTextAttachment, Point2D, Point3D,
-    PolylineVertex, Ref,
+    HatchEdge, ImageEntity, LightType, LwPolylineEntity, MLineVertex, MTextAttachment, Point2D,
+    Point3D, PolylineVertex, Ref,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase, Ocs};
@@ -986,6 +986,37 @@ fn bulged_polyline_element(
 
 /// A dashed outline, used for the shapes this renderer draws as an indication
 /// rather than as real geometry (VIEWPORT frames, WIPEOUT boundaries).
+/// The outline an IMAGE is drawn as: its clip boundary when clipping is on
+/// and keeps the inside, otherwise the whole image -- the corners of its
+/// frame, `size_pixels` one-pixel steps along each vector from the
+/// insertion point. The raster file itself is not part of the drawing, so
+/// the outline is what there is to show.
+fn image_outline(i: &ImageEntity) -> Vec<Point2D> {
+    if i.clipping == Some(true) && i.clip_outside != Some(true) && i.boundary.len() >= 3 {
+        return i.boundary.clone();
+    }
+    let (o, u, v) = (i.insertion_point, i.u_vector, i.v_vector);
+    let (w, h) = (i.size_pixels.x, i.size_pixels.y);
+    let at = |a: f64, b: f64| Point2D {
+        x: o.x + a * u.x + b * v.x,
+        y: o.y + a * u.y + b * v.y,
+    };
+    vec![at(0.0, 0.0), at(w, 0.0), at(w, h), at(0.0, h)]
+}
+
+/// Twice the area a closed outline encloses, unsigned (the shoelace sum):
+/// 0 for fewer than three points or points on one line.
+fn enclosed_area(pts: &[Point2D]) -> f64 {
+    let n = pts.len();
+    (0..n)
+        .map(|k| {
+            let (a, b) = (pts[k], pts[(k + 1) % n]);
+            a.x * b.y - b.x * a.y
+        })
+        .sum::<f64>()
+        .abs()
+}
+
 fn dashed_outline(pts: &[Point2D], color: &str, dash: &str, frame: Frame) -> String {
     format!(
         "<polygon points=\"{}\" fill=\"none\" stroke-dasharray=\"{dash}\" stroke=\"{color}\"/>",
@@ -1438,6 +1469,7 @@ fn drawn_point_count(e: &Entity, tables: &Tables) -> usize {
             l.vertices.len().saturating_mul(lines)
         }
         Entity::Wipeout(w) => w.boundary.len(),
+        Entity::Image(i) => i.boundary.len(),
         Entity::Solid3D(s)
         | Entity::Region(s)
         | Entity::PolylinePFace(s)
@@ -1605,8 +1637,13 @@ fn numbers_are_real(e: &Entity) -> bool {
                 && l.scale.is_none_or(f64::is_finite)
         }
         Entity::Light(l) => p3(&l.position) && p3(&l.target),
-        // Not drawn (see `render_entity`), so nothing of it reaches a frame.
-        Entity::Image(_) => true,
+        Entity::Image(i) => {
+            p3(&i.insertion_point)
+                && p3(&i.u_vector)
+                && p3(&i.v_vector)
+                && p2(&i.size_pixels)
+                && i.boundary.iter().all(p2)
+        }
         Entity::Dimension(_) | Entity::Attdef(_) | Entity::Unknown { .. } => true,
     }
 }
@@ -2328,11 +2365,17 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.unsupported.insert("ATTDEF".to_string());
             None
         }
-        // The raster file is not part of the drawing, and its frame is not
-        // drawn yet: reported like a type this renderer does not know.
-        Entity::Image(_) => {
-            ctx.unsupported.insert("IMAGE".to_string());
-            None
+        // The raster file is not part of the drawing: what is drawn is where
+        // the image sits, as a dashed outline like a WIPEOUT's. An outline
+        // that encloses nothing (no size, no vectors) is reported instead.
+        Entity::Image(i) => {
+            let outline = image_outline(i);
+            if enclosed_area(&outline) == 0.0 {
+                ctx.unsupported.insert("IMAGE".to_string());
+                return None;
+            }
+            ctx.consider_all(&outline);
+            Some(dashed_outline(&outline, &color, "2,2", frame))
         }
         Entity::Unknown { type_name, .. } => {
             ctx.unsupported.insert(type_name.clone());
@@ -2462,7 +2505,8 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
         Entity::MultiLeader(m) => p3(m.lines.first()?.first()?),
         Entity::MLine(l) => p3(&l.vertices.first()?.point),
         Entity::Light(l) => p3(&l.position),
-        Entity::Image(_) | Entity::Unknown { .. } => return None,
+        Entity::Image(i) => *image_outline(i).first()?,
+        Entity::Unknown { .. } => return None,
     })
 }
 
@@ -3591,6 +3635,70 @@ mod tests {
             !render_one(leader(None)).contains("<polygon"),
             "a flag the file did not state is not an arrowhead"
         );
+    }
+
+    fn image(clipping: Option<bool>, boundary: Vec<Point2D>) -> Entity {
+        let p = |x: f64, y: f64| Point3D { x, y, z: 0.0 };
+        Entity::Image(ImageEntity {
+            common: plain_common(),
+            insertion_point: p(10.0, 5.0),
+            u_vector: p(0.5, 0.0),
+            v_vector: p(0.0, 0.5),
+            size_pixels: Point2D { x: 40.0, y: 20.0 },
+            definition: Ref::Absent,
+            display_flags: Some(7),
+            clipping,
+            brightness: None,
+            contrast: None,
+            fade: None,
+            clip_outside: None,
+            boundary,
+        })
+    }
+
+    fn outline_points(svg: &str) -> usize {
+        let start = svg.find("points=\"").expect("an outline") + "points=\"".len();
+        let end = start + svg[start..].find('"').expect("closed attribute");
+        svg[start..end].split_whitespace().count()
+    }
+
+    #[test]
+    fn an_image_is_drawn_as_its_clip_boundary_or_its_whole_frame() {
+        let triangle = vec![
+            Point2D { x: 10.0, y: 5.0 },
+            Point2D { x: 30.0, y: 5.0 },
+            Point2D { x: 10.0, y: 15.0 },
+        ];
+        let clipped = render_one(image(Some(true), triangle.clone()));
+        assert!(clipped.contains("stroke-dasharray"), "{clipped}");
+        assert_eq!(outline_points(&clipped), 3);
+        // Clipping off, or not stated: the whole image, whatever boundary
+        // the file keeps.
+        assert_eq!(
+            outline_points(&render_one(image(Some(false), triangle.clone()))),
+            4
+        );
+        assert_eq!(outline_points(&render_one(image(None, triangle))), 4);
+    }
+
+    #[test]
+    fn an_image_that_encloses_nothing_is_reported_not_drawn() {
+        let mut e = image(None, Vec::new());
+        if let Entity::Image(i) = &mut e {
+            i.size_pixels = Point2D { x: 0.0, y: 0.0 };
+        }
+        let db = CadDatabase {
+            entities: vec![e],
+            tables: Tables::default(),
+            read_diagnostics: Default::default(),
+        };
+        let options = ToSvgOptions {
+            space: Space::All,
+            ..ToSvgOptions::default()
+        };
+        let result = to_svg(&db, options);
+        assert!(result.unsupported_types.contains(&"IMAGE".to_string()));
+        assert!(!result.svg.contains("stroke-dasharray"));
     }
 
     fn light(light_type: Option<LightType>) -> Entity {

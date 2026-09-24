@@ -212,7 +212,7 @@ fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
                 })
                 .collect()
         }
-        HatchEdge::Spline { control_points } => {
+        HatchEdge::Spline { control_points, .. } => {
             if control_points.is_empty() {
                 Vec::new()
             } else {
@@ -447,6 +447,20 @@ mod tests {
         );
     }
 
+    fn spline(control_points: Vec<Point2D>) -> HatchEdge {
+        HatchEdge::Spline {
+            degree: 1,
+            rational: false,
+            periodic: false,
+            knots: Vec::new(),
+            control_points,
+            weights: Vec::new(),
+            fit_points: Vec::new(),
+            start_tangent: None,
+            end_tangent: None,
+        }
+    }
+
     #[test]
     fn edge_points_line_is_a_single_point() {
         let pts = edge_points(&HatchEdge::Line {
@@ -481,16 +495,9 @@ mod tests {
             Point2D { x: 1.0, y: 1.0 },
             Point2D { x: 2.0, y: 2.0 },
         ];
-        let pts = edge_points(&HatchEdge::Spline {
-            control_points: cps.clone(),
-        });
+        let pts = edge_points(&spline(cps.clone()));
         assert_eq!(pts, &cps[..2]);
-        assert_eq!(
-            edge_points(&HatchEdge::Spline {
-                control_points: vec![]
-            }),
-            Vec::new()
-        );
+        assert_eq!(edge_points(&spline(vec![])), Vec::new());
     }
 
     #[test]

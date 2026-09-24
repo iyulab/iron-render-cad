@@ -1465,7 +1465,7 @@ fn drawn_point_count(e: &Entity, tables: &Tables) -> usize {
                             HatchEdge::Line { .. } => 1,
                             HatchEdge::Arc { .. } => hatch::ARC_SEGMENTS,
                             HatchEdge::Ellipse { .. } => hatch::ELLIPSE_SEGMENTS,
-                            HatchEdge::Spline { control_points } => control_points.len(),
+                            HatchEdge::Spline { control_points, .. } => control_points.len(),
                         })
                         .sum(),
                 })
@@ -1593,7 +1593,7 @@ fn numbers_are_real(e: &Entity) -> bool {
                     end_angle,
                     ..
                 } => p2(center) && p2(end) && real(&[*minor_major_ratio, *start_angle, *end_angle]),
-                HatchEdge::Spline { control_points } => control_points.iter().all(p2),
+                HatchEdge::Spline { control_points, .. } => control_points.iter().all(p2),
             }),
         }),
         Entity::Leader(l) => l.vertices.iter().all(p3),
@@ -2447,7 +2447,7 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
             HatchBoundaryPath::Edges(edges) => match edges.first()? {
                 HatchEdge::Line { start, .. } => *start,
                 HatchEdge::Arc { center, .. } | HatchEdge::Ellipse { center, .. } => *center,
-                HatchEdge::Spline { control_points } => *control_points.first()?,
+                HatchEdge::Spline { control_points, .. } => *control_points.first()?,
             },
         },
         Entity::Leader(l) => p3(l.vertices.first()?),

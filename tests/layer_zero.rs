@@ -23,6 +23,10 @@ fn common(id: u64, layer: &str) -> EntityCommon {
         color_index: 256,
         true_color: None,
         invisible: false,
+        linetype: uncad_model::model::EntityLinetype::ByLayer,
+        linetype_scale: 1.0,
+        lineweight: Some(-1),
+        transparency: Some(0),
     }
 }
 

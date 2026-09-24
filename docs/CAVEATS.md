@@ -32,6 +32,10 @@ useful than a gap -- but a reader should know which parts are approximate:
   at the ordinary stroke, whatever its constant or per-vertex widths -- a wide border, a
   tapered arrow and a DONUT's ring all come out as thin lines. The widths are in the model;
   drawing a polyline as the filled outline its widths describe is not implemented.
+- **Linetypes, lineweights and transparency are not drawn**: every entity is a solid line at
+  the ordinary stroke, fully opaque, whatever linetype, linetype scale, lineweight or
+  transparency it or its layer states. The model carries all of them; drawing a dash pattern
+  needs the LTYPE table's definitions, which the model does not carry.
 - **3DSOLID / REGION / POLYLINE_PFACE as wireframes**: the model carries a solid's edges
   only, and the renderer draws the lines. A body flat in a plane parallel to XY (a REGION
   is a closed 2D profile, so usually) is drawn in plan, where the file puts it; a body with

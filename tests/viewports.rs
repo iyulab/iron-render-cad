@@ -171,6 +171,28 @@ fn an_inactive_layouts_overall_viewport_is_found_by_its_view() {
 }
 
 #[test]
+fn a_sheet_read_from_a_layout_that_is_not_current_keeps_its_overall_viewport() {
+    // G19: the same sheet as written for a layout that is not the current
+    // one -- every viewport numbered 0. The overall viewport is found by its
+    // view, and the model is drawn only through the two detail windows.
+    let db: CadDatabase = serde_json::from_str(include_str!("golden/g19.expected.json"))
+        .expect("the golden model deserializes");
+    let result = layout_to_svg(&db, "Layout1", ToSvgOptions::default()).expect("a sheet");
+    let overall: Vec<u64> = result
+        .viewports
+        .iter()
+        .filter(|r| r.overall)
+        .map(|r| r.id.value())
+        .collect();
+    assert_eq!(overall, [271]);
+    let vp = by_id(&result.viewports, 271);
+    assert!(vp.model_to_paper.is_none() && vp.model_window.is_none());
+    // The same sheet as G14 draws it, where the viewports carry numbers.
+    let numbered = layout_to_svg(&g14(), "Layout1", ToSvgOptions::default()).expect("a sheet");
+    assert_eq!(result.svg, numbered.svg);
+}
+
+#[test]
 fn the_sheet_says_where_its_paper_comes_from() {
     let mut db = g14();
     // No limits: the paper from the plot settings -- A3 stated portrait,

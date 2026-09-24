@@ -101,3 +101,59 @@ fn a_control_character_in_a_label_reaches_neither_the_svg_nor_the_png() {
     .expect("to_png must not fail on a control character");
     assert!(png.png.starts_with(b"\x89PNG"));
 }
+
+/// The renderer writes a few values into the document as placeholders it
+/// fills in once the whole picture is known (`@@SW@@...@@`, `@@IL@@...@@`).
+/// A label that happens to hold the same characters must stay a label: not
+/// be taken for a placeholder, and not swallow what follows it.
+#[test]
+fn a_label_that_looks_like_a_placeholder_is_drawn_as_written() {
+    let text = |id, y: f64, s: &str| {
+        Entity::Text(TextEntity {
+            common: common(id),
+            start_point: Point2D { x: 0.0, y },
+            text_height: 2.5,
+            text: s.to_string(),
+            rotation: 0.0,
+            horizontal_justification: Default::default(),
+            vertical_justification: Default::default(),
+            alignment_point: None,
+            width_factor: 1.0,
+            oblique_angle: 0.0,
+            style_name: uncad_model::Ref::Absent,
+            elevation: 0.0,
+            extrusion: uncad_model::Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+        })
+    };
+    let db = CadDatabase {
+        entities: vec![
+            text(0x90, 0.0, "@@SW@@"),
+            text(0x91, 10.0, "5@@IL@@200"),
+            text(0x92, 20.0, "AFTER"),
+        ],
+        tables: Tables::default(),
+        read_diagnostics: ReadDiagnostics::default(),
+    };
+    let options = ToSvgOptions {
+        space: Space::All,
+        ..ToSvgOptions::default()
+    };
+    let svg = to_svg(&db, options).svg;
+    assert!(
+        svg.contains("AFTER"),
+        "nothing after the label is lost: {svg}"
+    );
+    assert_eq!(svg.matches("<text").count(), 3, "{svg}");
+    let png = to_png(
+        &db,
+        ToPngOptions {
+            svg: options,
+            ..ToPngOptions::default()
+        },
+    );
+    assert!(png.is_ok(), "{:?}", png.err());
+}

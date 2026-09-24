@@ -103,16 +103,25 @@ impl Frame {
 /// usvg's XML parser refuses it, and `to_png` with it. The replacement
 /// character keeps a mark where it was, the same mark a reader leaves for a
 /// byte it could not decode.
+///
+/// It also never writes two `@` in a row: the renderer marks a few values it
+/// fills in once the whole picture is known with `@@`-delimited
+/// placeholders, and a label holding `@@` would be read as one -- the
+/// second `@` of a pair is written as the character reference `&#64;`,
+/// which draws the same.
 pub(super) fn escape_xml(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
+    let mut after_at = false;
     for c in s.chars() {
         match c {
             '&' => out.push_str("&amp;"),
             '<' => out.push_str("&lt;"),
             '>' => out.push_str("&gt;"),
+            '@' if after_at => out.push_str("&#64;"),
             c if is_xml_illegal(c) => out.push('\u{FFFD}'),
             c => out.push(c),
         }
+        after_at = c == '@';
     }
     out
 }
@@ -199,6 +208,14 @@ mod tests {
         // Quotes are deliberately NOT escaped -- text content, not an
         // attribute value.
         assert_eq!(escape_xml("\"quoted\""), "\"quoted\"");
+    }
+
+    #[test]
+    fn escape_xml_never_writes_two_at_signs_in_a_row() {
+        assert_eq!(escape_xml("5@200"), "5@200");
+        assert_eq!(escape_xml("@@SW@@"), "@&#64;SW@&#64;");
+        assert_eq!(escape_xml("@@@"), "@&#64;&#64;");
+        assert!(!escape_xml("a@@b@@@c").contains("@@"));
     }
 
     #[test]

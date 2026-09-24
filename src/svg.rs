@@ -1577,7 +1577,7 @@ fn numbers_are_real(e: &Entity) -> bool {
         Entity::Hatch(h) => h.boundary_paths.iter().all(|path| match path {
             HatchBoundaryPath::Polyline(v) => v.iter().all(|v| p2(&v.point) && real(&[v.bulge])),
             HatchBoundaryPath::Edges(edges) => edges.iter().all(|edge| match edge {
-                HatchEdge::Line { start } => p2(start),
+                HatchEdge::Line { start, .. } => p2(start),
                 HatchEdge::Arc {
                     center,
                     radius,
@@ -2445,7 +2445,7 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
         Entity::Hatch(h) => match h.boundary_paths.first()? {
             HatchBoundaryPath::Polyline(v) => v.first()?.point,
             HatchBoundaryPath::Edges(edges) => match edges.first()? {
-                HatchEdge::Line { start } => *start,
+                HatchEdge::Line { start, .. } => *start,
                 HatchEdge::Arc { center, .. } | HatchEdge::Ellipse { center, .. } => *center,
                 HatchEdge::Spline { control_points } => *control_points.first()?,
             },

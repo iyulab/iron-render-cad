@@ -167,7 +167,7 @@ fn polyline_path_points(vertices: &[PolylineVertex]) -> Vec<Point2D> {
 /// like a full ellipse, with its own first point).
 fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
     match edge {
-        HatchEdge::Line { start } => vec![*start],
+        HatchEdge::Line { start, .. } => vec![*start],
         HatchEdge::Arc {
             center,
             radius,
@@ -451,6 +451,7 @@ mod tests {
     fn edge_points_line_is_a_single_point() {
         let pts = edge_points(&HatchEdge::Line {
             start: Point2D { x: 1.0, y: 2.0 },
+            end: Point2D { x: 3.0, y: 2.0 },
         });
         assert_eq!(pts, vec![Point2D { x: 1.0, y: 2.0 }]);
     }

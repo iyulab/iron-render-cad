@@ -18,6 +18,7 @@ use super::{
     select_entities_for_space, select_owned_by, stroke_width_placeholder, svg_matrix, view_box_of,
     walk, Ctx, Framed, Part, Rect, Scene, Space, ToSvgOptions,
 };
+use crate::limits::MAX_WORLD_COORDINATE;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use uncad_model::model::{Entity, EntityId, Point2D, ViewportEntity, ViewportView};
@@ -400,10 +401,14 @@ fn model_to_paper(vp: &ViewportEntity, view: &ViewportView) -> Affine2 {
 /// with the printable area's lower-left corner moved by the plot origin at
 /// the layout's origin (the rule ezdxf's `reset_paper_limits` applies). The
 /// settings are in millimetres; a layout drawn in inches has them divided
-/// by 25.4. `None` when the layout states neither.
+/// by 25.4. `None` when the layout states neither -- or states one no
+/// drawing can mean, a number past [`MAX_WORLD_COORDINATE`] (a corrupt
+/// header), which would otherwise size the picture the way the extent of
+/// the model space is kept from doing.
 fn sheet(layout: &LayoutRecord) -> Option<(Box2D, SheetSource)> {
+    let sane = |v: f64| v.is_finite() && v.abs() < MAX_WORLD_COORDINATE;
     let (lo, hi) = (layout.limits_min, layout.limits_max);
-    if [lo.x, lo.y, hi.x, hi.y].iter().all(|v| v.is_finite()) && hi.x > lo.x && hi.y > lo.y {
+    if [lo.x, lo.y, hi.x, hi.y].into_iter().all(sane) && hi.x > lo.x && hi.y > lo.y {
         let limits = Box2D {
             min_x: lo.x,
             max_x: hi.x,
@@ -413,7 +418,7 @@ fn sheet(layout: &LayoutRecord) -> Option<(Box2D, SheetSource)> {
         return Some((limits, SheetSource::Limits));
     }
     let p = &layout.plot_settings;
-    let sized = |v: f64| v.is_finite() && v > 0.0;
+    let sized = |v: f64| sane(v) && v > 0.0;
     if !(sized(p.paper_width) && sized(p.paper_height)) {
         return None;
     }
@@ -428,7 +433,7 @@ fn sheet(layout: &LayoutRecord) -> Option<(Box2D, SheetSource)> {
     } else {
         1.0
     };
-    let finite = |v: f64| if v.is_finite() { v } else { 0.0 };
+    let finite = |v: f64| if sane(v) { v } else { 0.0 };
     let shift = Point2D {
         x: finite(p.margin_left) + finite(p.plot_origin.x),
         y: finite(p.margin_bottom) + finite(p.plot_origin.y),
@@ -485,6 +490,22 @@ mod tests {
 
     fn corners(b: Box2D) -> [f64; 4] {
         [b.min_x, b.min_y, b.max_x, b.max_y]
+    }
+
+    #[test]
+    fn a_sheet_size_no_drawing_can_mean_is_not_a_sheet() {
+        // Limits past the coordinate bound fall back to the paper ...
+        let l = layout(
+            (p(0.0, 0.0), p(1e200, 1e200)),
+            plot((420.0, 297.0), (0.0, 0.0), (0.0, 0.0)),
+        );
+        assert_eq!(sheet(&l).unwrap().1, SheetSource::PlotSettings);
+        // ... and a paper past it is no sheet at all.
+        let l = layout(
+            (p(0.0, 0.0), p(0.0, 0.0)),
+            plot((1e200, 297.0), (0.0, 0.0), (0.0, 0.0)),
+        );
+        assert!(sheet(&l).is_none());
     }
 
     #[test]

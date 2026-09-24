@@ -125,7 +125,12 @@ fn cluster_entity_boxes(boxes: &[Box2D]) -> Vec<Vec<Box2D>> {
             let (cx, cy) = key(x, y);
             for dx in -1..=1 {
                 for dy in -1..=1 {
-                    let Some(bucket) = grid.get(&(cx + dx, cy + dy)) else {
+                    // Saturating: far from the origin and with a tiny cell, a
+                    // key is already at the end of the range (the cast
+                    // saturates), and the exact comparison below still
+                    // decides.
+                    let Some(bucket) = grid.get(&(cx.saturating_add(dx), cy.saturating_add(dy)))
+                    else {
                         continue;
                     };
                     for &j in bucket {
@@ -222,6 +227,21 @@ pub(super) fn dominant_cluster_box(boxes: &[Box2D]) -> Option<Box2D> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn degenerate_boxes_far_from_the_origin_do_not_overflow_the_grid() {
+        // Identical zero-size boxes make the cell as small as it gets, and at
+        // 1e10 the cell index is past the end of an i64.
+        let b = Box2D {
+            min_x: 1e10,
+            max_x: 1e10,
+            min_y: 1e10,
+            max_y: 1e10,
+        };
+        let groups = cluster_entity_boxes(&[b, b, b]);
+        assert_eq!(groups.len(), 1, "{groups:?}");
+    }
+
     use super::*;
 
     fn close(a: f64, b: f64) {

@@ -2,6 +2,7 @@
 //! tiled through SVG's own `<pattern>` element.
 
 use super::format::{clean, neg};
+use super::spline;
 use super::Ctx;
 use crate::color::{tint_toward_white, true_color_to_hex, DEFAULT_COLOR};
 use crate::limits::{Cap, MAX_HATCH_TILE_SPAN};
@@ -212,12 +213,27 @@ fn edge_points(edge: &HatchEdge) -> Vec<Point2D> {
                 })
                 .collect()
         }
-        HatchEdge::Spline { control_points, .. } => {
-            if control_points.is_empty() {
-                Vec::new()
-            } else {
-                control_points[..control_points.len() - 1].to_vec()
-            }
+        // The NURBS curve the edge defines, as for a SPLINE entity. Without a
+        // valid definition, what the edge still states: its fit points,
+        // which lie on the curve, else its control polygon.
+        HatchEdge::Spline {
+            degree,
+            knots,
+            control_points,
+            weights,
+            fit_points,
+            ..
+        } => {
+            let mut points = spline::nurbs_points(*degree, knots, control_points, weights)
+                .unwrap_or_else(|| {
+                    if fit_points.is_empty() {
+                        control_points.clone()
+                    } else {
+                        fit_points.clone()
+                    }
+                });
+            points.pop();
+            points
         }
     }
 }
@@ -489,15 +505,67 @@ mod tests {
     }
 
     #[test]
-    fn edge_points_spline_drops_the_final_control_point() {
+    fn edge_points_spline_without_a_valid_definition_is_its_polygon_less_its_end() {
         let cps = vec![
             Point2D { x: 0.0, y: 0.0 },
             Point2D { x: 1.0, y: 1.0 },
             Point2D { x: 2.0, y: 2.0 },
         ];
+        // No knots: nothing to evaluate, so the control polygon.
         let pts = edge_points(&spline(cps.clone()));
         assert_eq!(pts, &cps[..2]);
         assert_eq!(edge_points(&spline(vec![])), Vec::new());
+        // No knots but fit points: those, which lie on the curve.
+        let fitted = HatchEdge::Spline {
+            degree: 3,
+            rational: false,
+            periodic: false,
+            knots: Vec::new(),
+            control_points: Vec::new(),
+            weights: Vec::new(),
+            fit_points: cps.clone(),
+            start_tangent: None,
+            end_tangent: None,
+        };
+        assert_eq!(edge_points(&fitted), &cps[..2]);
+    }
+
+    /// A rational quadratic with the standard weights is an exact quarter
+    /// circle: every point drawn is on it, where the control polygon's corner
+    /// is not -- and with its weights dropped (all 1) it would be a parabola,
+    /// off the circle between its ends.
+    #[test]
+    fn edge_points_spline_is_the_nurbs_curve_its_weights_define() {
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let quarter = |weights: Vec<f64>| HatchEdge::Spline {
+            degree: 2,
+            rational: !weights.is_empty(),
+            periodic: false,
+            knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            control_points: vec![
+                Point2D { x: 2.0, y: 0.0 },
+                Point2D { x: 2.0, y: 2.0 },
+                Point2D { x: 0.0, y: 2.0 },
+            ],
+            weights,
+            fit_points: Vec::new(),
+            start_tangent: None,
+            end_tangent: None,
+        };
+        let pts = edge_points(&quarter(vec![1.0, h, 1.0]));
+        assert!(pts.len() > 3, "sampled, not the polygon: {pts:?}");
+        for p in &pts {
+            assert!((p.x.hypot(p.y) - 2.0).abs() < 1e-12, "{p:?} is off the arc");
+        }
+        assert_eq!(pts[0], Point2D { x: 2.0, y: 0.0 });
+        assert!(!pts.contains(&Point2D { x: 2.0, y: 2.0 }));
+
+        let parabola = edge_points(&quarter(Vec::new()));
+        let off = parabola
+            .iter()
+            .map(|p| (p.x.hypot(p.y) - 2.0).abs())
+            .fold(0.0, f64::max);
+        assert!(off > 0.1, "unweighted, the curve leaves the circle: {off}");
     }
 
     #[test]

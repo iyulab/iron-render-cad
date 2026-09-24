@@ -11,8 +11,8 @@ them is still drawn (not reported as unsupported), because a recognizable pictur
 useful than a gap -- but a reader should know which parts are approximate:
 
 - **Curves as chords**: curved HATCH edges, and the bulged segments of a HATCH polyline
-  boundary, are drawn as polylines through sampled points. A SPLINE stored by control points is evaluated as the NURBS curve its degree,
-  knots and weights define, and drawn through 16 points per knot span; a SPLINE stored
+  boundary, are drawn as polylines through sampled points. A SPLINE stored by control points, and a HATCH spline edge, is evaluated as the NURBS curve its degree,
+  knots and weights define, and drawn through 16 points per knot span; one stored
   by fit points only is drawn through its fit points. A spline whose knots or weights do
   not add up to a definition is drawn as its control polygon, which does not lie on the
   curve. (ARC and ELLIPSE, full or partial, are exact SVG arcs, and so is a bulged segment of an

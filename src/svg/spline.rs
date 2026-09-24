@@ -1,4 +1,5 @@
-//! SPLINE curves as chords through points evaluated on the curve.
+//! SPLINE curves and HATCH spline edges as chords through points evaluated on
+//! the curve.
 //!
 //! A spline stored by control points is a NURBS curve: its degree, knot
 //! vector and weights define it, and the control points do not lie on it.
@@ -35,25 +36,43 @@ pub(super) fn spline_points(s: &SplineEntity) -> Vec<Point2D> {
 /// The curve sampled by de Boor's algorithm, or `None` when the spline does
 /// not carry a complete NURBS definition.
 fn evaluate(s: &SplineEntity) -> Option<Vec<Point2D>> {
-    let p = usize::try_from(s.degree).ok()?;
-    let n = s.control_points.len();
-    let knots = &s.knots;
+    let control: Vec<Point2D> = s
+        .control_points
+        .iter()
+        .map(|c| Point2D { x: c.x, y: c.y })
+        .collect();
+    nurbs_points(s.degree, &s.knots, &control, &s.weights)
+}
+
+/// A NURBS curve in the plane -- degree, knots, control points and weights
+/// (empty for a non-rational one, where every weight is 1) -- sampled by de
+/// Boor's algorithm, or `None` when those do not form a valid definition:
+/// the knot count must be control points + degree + 1, the knots
+/// non-decreasing and finite, and weights, when present, one per control
+/// point. Shared by SPLINE entities and HATCH spline edges.
+pub(super) fn nurbs_points(
+    degree: u32,
+    knots: &[f64],
+    control: &[Point2D],
+    weights: &[f64],
+) -> Option<Vec<Point2D>> {
+    let p = usize::try_from(degree).ok()?;
+    let n = control.len();
     if p == 0 || n <= p || knots.len() != n + p + 1 {
         return None;
     }
-    if !s.weights.is_empty() && s.weights.len() != n {
+    if !weights.is_empty() && weights.len() != n {
         return None;
     }
     if knots.windows(2).any(|k| k[1] < k[0]) || knots.iter().any(|k| !k.is_finite()) {
         return None;
     }
     // Homogeneous control points: (w x, w y, w).
-    let homogeneous: Vec<[f64; 3]> = s
-        .control_points
+    let homogeneous: Vec<[f64; 3]> = control
         .iter()
         .enumerate()
         .map(|(i, c)| {
-            let w = s.weights.get(i).copied().unwrap_or(1.0);
+            let w = weights.get(i).copied().unwrap_or(1.0);
             [c.x * w, c.y * w, w]
         })
         .collect();

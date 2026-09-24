@@ -129,6 +129,8 @@ mod tests {
 
     fn spline(degree: u32, control: &[(f64, f64)], knots: &[f64], weights: &[f64]) -> SplineEntity {
         SplineEntity {
+            start_tangent: None,
+            end_tangent: None,
             common: EntityCommon {
                 id: EntityId::new(1),
                 origin: Origin::Vector,

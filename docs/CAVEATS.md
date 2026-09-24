@@ -51,8 +51,10 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **Text codes are decoded to what they show, not drawn as formatting**: MTEXT paragraph
   breaks become lines (a blank paragraph keeps its line), stacked text is drawn inline as
   `top/bottom` and a stacked fraction reads `3 1/2` rather than `31/2`, format codes (font,
-  colour, height, width) are dropped, and the `%%c`/`%%d`/`%%p` symbol codes and `\U+XXXX`
-  escapes in TEXT, ATTRIB and MTEXT become their characters. A format code that is not closed
+  colour, height, width) are dropped, and the `%%c`/`%%d`/`%%p` symbol codes in TEXT,
+  ATTRIB and MTEXT become their characters. A `\U+XXXX` escape is the reader's to undo
+  (the model's principles, §6.1), so the renderer draws what arrives: an escape a reader
+  kept -- one naming an ASCII character -- is drawn as written. A format code that is not closed
   by its `;`, or one the renderer does not know, is drawn as written. Everything is drawn in
   one plain face; underline and overline toggles draw nothing. A TEXT whose file stores height 0 ("the style's height", which the model
   does not carry) is drawn at height 1.

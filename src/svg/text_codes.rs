@@ -1,9 +1,12 @@
 //! The control codes a drawing's text is written with, turned into the
 //! characters they stand for.
 //!
-//! The model carries text as the file wrote it; this is where it is read.
-//! Three families are handled, in one pass so that what one produces is
-//! never read again as another:
+//! The model carries text with its codes in it, and splits it into them
+//! ([`uncad_model::text::tokens`], one pass, so what one code produces is
+//! never read again as another); this is what the renderer draws of each.
+//! How a file *stored* a string (`\U+XXXX`, `\M+nXXXX`) is not here: the
+//! reader undid it before the text reached the model. Two families are
+//! drawn:
 //!
 //! - **Percent codes**, in TEXT, ATTRIB and MTEXT: `%%d` (degree), `%%p`
 //!   (plus-minus), `%%c` (diameter), `%%%` (a percent sign), `%%nnn` (the
@@ -13,11 +16,7 @@
 //!   diameter signs (dimension text writes `90%%127` for 90 degrees), so
 //!   they are read as those signs; a code naming any other control
 //!   character, which drawn text cannot carry, is left as written, as is
-//!   any other `%%x`.
-//! - **Unicode escapes**, in any text: `\U+XXXX` is the Unicode character --
-//!   the way a DXF file writes a character its code page cannot hold, in
-//!   every string and not only in MTEXT, so a drawing saved both ways reads
-//!   the same. Outside MTEXT no other backslash starts a code.
+//!   any other `%%x`. Outside MTEXT a backslash starts no code.
 //! - **MTEXT formatting codes**: `\P` (paragraph), `\N` (column) and `\X` (a
 //!   dimension's text, split above and below its line) break the line; `\~`
 //!   is a non-breaking space; `\\`, `\{` and `\}` are the characters; `\S…;`
@@ -27,129 +26,41 @@
 //!   halves; codes that take a value up to `;` (`\A`, `\C`, `\c`, `\F`,
 //!   `\f`, `\H`, `\Q`, `\T`, `\W`, `\p`) and the one-letter switches (`\L`,
 //!   `\l`, `\O`, `\o`, `\K`, `\k`) change only how text looks and are
-//!   dropped, as are `{` / `}` grouping. `\M+nXXXX` (a character in an Asian
-//!   code page) is left as written: this crate has no code page tables. Any
-//!   other backslash is kept, with what follows it.
+//!   dropped, as are `{` / `}` grouping. Any other backslash is kept, with
+//!   what follows it.
 //!
 //! What is drawn is plain text -- fonts, colors, heights and stacking are
 //! not reproduced.
 
-/// `text` with its percent codes and Unicode escapes read, and, for MTEXT,
-/// its formatting codes.
+/// `text` as the plain text it draws: its percent codes and, for MTEXT,
+/// its formatting codes read (see the module documentation).
 pub(super) fn decode(text: &str, mtext: bool) -> String {
-    let chars: Vec<char> = text.chars().collect();
+    let kind = if mtext {
+        TextKind::MText
+    } else {
+        TextKind::Line
+    };
     let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '%' && chars.get(i + 1) == Some(&'%') {
-            i += 2 + percent_code(&chars[i + 2..], &mut out);
-            continue;
+    for token in tokens(text, kind) {
+        match token {
+            Token::Char(c) => out.push(c),
+            Token::Special(Special::Degree) => out.push('\u{b0}'),
+            Token::Special(Special::PlusMinus) => out.push('\u{b1}'),
+            Token::Special(Special::Diameter) => out.push('\u{2300}'),
+            Token::CharCode(code) => match shape_font_char(u32::from(code)) {
+                Some(c) => out.push(c),
+                None => out.push_str(&format!("%%{code:03}")),
+            },
+            Token::Break(_) => out.push('\n'),
+            Token::NonBreakingSpace => out.push(' '),
+            Token::Stack { top, bottom, .. } => push_stack(top, bottom, &mut out),
+            Token::StackUnsplit(body) => push_stack(body, "", &mut out),
+            Token::Unknown(raw) => out.push_str(raw),
+            // How the text looks, which is not drawn.
+            Token::Toggle(_) | Token::Property { .. } | Token::GroupStart | Token::GroupEnd => {}
         }
-        if c == '\\' && !mtext && chars.get(i + 1) == Some(&'U') {
-            if let Some(ch) = unicode_escape(&chars[i + 2..]) {
-                out.push(ch);
-                i += 7;
-                continue;
-            }
-        }
-        if mtext {
-            match c {
-                '\\' => {
-                    i += 1 + mtext_code(&chars[i + 1..], &mut out);
-                    continue;
-                }
-                '{' | '}' => {
-                    i += 1;
-                    continue;
-                }
-                _ => {}
-            }
-        }
-        out.push(c);
-        i += 1;
     }
     out
-}
-
-/// Reads the percent code after a `%%`, pushing what it stands for, and
-/// returns how many characters it took.
-fn percent_code(rest: &[char], out: &mut String) -> usize {
-    match rest.first().map(char::to_ascii_lowercase) {
-        Some('d') => out.push('\u{b0}'),
-        Some('p') => out.push('\u{b1}'),
-        Some('c') => out.push('\u{2300}'),
-        Some('%') => out.push('%'),
-        Some('u' | 'o') => {}
-        Some(d) if d.is_ascii_digit() => {
-            let digits: String = rest.iter().take(3).collect();
-            match (digits.len() == 3 && digits.chars().all(|d| d.is_ascii_digit()))
-                .then(|| digits.parse::<u32>().ok())
-                .flatten()
-                .and_then(shape_font_char)
-            {
-                Some(ch) => {
-                    out.push(ch);
-                    return 3;
-                }
-                None => {
-                    out.push_str("%%");
-                    return 0;
-                }
-            }
-        }
-        _ => {
-            out.push_str("%%");
-            return 0;
-        }
-    }
-    1
-}
-
-/// Reads the MTEXT code after a `\`, pushing what it stands for, and
-/// returns how many characters it took.
-fn mtext_code(rest: &[char], out: &mut String) -> usize {
-    let Some(&c) = rest.first() else {
-        out.push('\\');
-        return 0;
-    };
-    match c {
-        'P' | 'N' | 'X' => out.push('\n'),
-        '~' => out.push(' '),
-        '\\' | '{' | '}' => out.push(c),
-        'L' | 'l' | 'O' | 'o' | 'K' | 'k' => {}
-        'U' => {
-            if let Some(ch) = unicode_escape(&rest[1..]) {
-                out.push(ch);
-                return 6;
-            }
-            out.push_str("\\U");
-        }
-        'S' => {
-            let Some(end) = rest.iter().position(|&x| x == ';') else {
-                out.push_str("\\S");
-                return 1;
-            };
-            push_stack(&rest[1..end], out);
-            return end + 1;
-        }
-        'A' | 'C' | 'c' | 'F' | 'f' | 'H' | 'Q' | 'T' | 'W' | 'p' => {
-            // The value runs to the next `;`; without one the code is not
-            // closed, and the text is kept rather than swallowed.
-            match rest.iter().position(|&x| x == ';') {
-                Some(end) => return end + 1,
-                None => {
-                    out.push('\\');
-                    out.push(c);
-                }
-            }
-        }
-        _ => {
-            out.push('\\');
-            out.push(c);
-        }
-    }
-    1
 }
 
 /// The character a `%%nnn` code draws: the standard shape fonts' degree,
@@ -165,44 +76,25 @@ fn shape_font_char(code: u32) -> Option<char> {
     }
 }
 
-/// Writes a stack's body inline as `top/bottom`, whichever of `^`, `#` and
-/// `/` separates the two. A stack with one side empty -- a superscript
-/// `2^`, a subscript `^2` -- is the other side alone, not a fraction with a
-/// dangling bar; and a stack that follows a digit is set off from it by a
-/// space, since `3` and `1/2` written together read as `31/2`.
-fn push_stack(body: &[char], out: &mut String) {
-    let blank = |side: &[char]| side.iter().all(|x| x.is_whitespace());
-    let shown: Vec<char> = match body.iter().position(|&x| matches!(x, '^' | '#' | '/')) {
-        Some(at) if blank(&body[..at]) => body[at + 1..].to_vec(),
-        Some(at) if blank(&body[at + 1..]) => body[..at].to_vec(),
-        _ => body
-            .iter()
-            .map(|&x| match x {
-                '^' | '#' => '/',
-                x => x,
-            })
-            .collect(),
+/// Writes a stack inline as `top/bottom`. A stack with one side empty -- a
+/// superscript `2^`, a subscript `^2` -- is the other side alone, not a
+/// fraction with a dangling bar; and a stack that follows a digit is set off
+/// from it by a space, since `3` and `1/2` written together read as `31/2`.
+fn push_stack(top: &str, bottom: &str, out: &mut String) {
+    let blank = |side: &str| side.chars().all(char::is_whitespace);
+    let shown = match (blank(top), blank(bottom)) {
+        (true, true) => return,
+        (true, false) => bottom.to_string(),
+        (false, true) => top.to_string(),
+        (false, false) => format!("{top}/{bottom}"),
     };
-    if blank(&shown) {
-        return;
-    }
     if out.ends_with(|c: char| c.is_ascii_digit()) {
         out.push(' ');
     }
-    out.extend(shown);
+    out.push_str(&shown);
 }
 
-/// `+XXXX` (four hex digits) as the character it names.
-fn unicode_escape(rest: &[char]) -> Option<char> {
-    if rest.first() != Some(&'+') || rest.len() < 5 {
-        return None;
-    }
-    let hex: String = rest[1..5].iter().collect();
-    if !hex.chars().all(|h| h.is_ascii_hexdigit()) {
-        return None;
-    }
-    u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
-}
+use uncad_model::text::{tokens, Special, TextKind, Token};
 
 #[cfg(test)]
 mod tests {
@@ -222,11 +114,15 @@ mod tests {
     }
 
     #[test]
-    fn a_unicode_escape_is_its_character_whether_or_not_a_semicolon_follows() {
-        // Measured in a drawing: a diameter symbol written as an escape right
-        // after an alignment code, with the number running on.
-        assert_eq!(decode(r"\A1;\U+22052.3794", true), "\u{2205}2.3794");
-        assert_eq!(decode(r"\U+00B0C; next", true), "\u{b0}C; next");
+    fn a_storage_escape_is_not_read_here() {
+        // How a file stored a character (`\U+XXXX`) is undone by the reader
+        // before the text reaches the model; what is left is an escape of an
+        // ASCII character, which the reader keeps as written -- and so does
+        // the renderer, in either kind of text.
+        assert_eq!(decode(r"\U+0041 20", false), r"\U+0041 20");
+        assert_eq!(decode(r"\A1;\U+005C", true), r"\U+005C");
+        // The character the reader produced is drawn as itself.
+        assert_eq!(decode("\\A1;\u{2205}2.3794", true), "\u{2205}2.3794");
     }
 
     #[test]
@@ -261,15 +157,6 @@ mod tests {
     }
 
     #[test]
-    fn a_unicode_escape_is_its_character_in_plain_text_too() {
-        // An older DXF file writes a character its code page cannot hold
-        // this way in every string, TEXT and ATTRIB included.
-        assert_eq!(decode(r"\U+2205 20", false), "\u{2205} 20");
-        assert_eq!(decode(r"\U+04100", false), "\u{410}0");
-        assert_eq!(decode(r"\U+12", false), r"\U+12");
-    }
-
-    #[test]
     fn the_shape_font_codes_are_degree_plus_minus_and_diameter() {
         // As dimension text writes them.
         assert_eq!(decode("90%%127", false), "90\u{b0}");
@@ -280,11 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn a_unicode_escape_is_its_character_in_a_text_too() {
-        assert_eq!(decode(r"\U+00B1 3", false), "\u{b1} 3");
-        assert_eq!(decode(r"\U+2205 50", true), "\u{2205} 50");
-        // Not an escape: kept, backslash and all.
-        assert_eq!(decode(r"\U+ZZZZ", false), r"\U+ZZZZ");
+    fn outside_mtext_a_backslash_starts_nothing() {
         assert_eq!(decode(r"C:\Temp\{x}", false), r"C:\Temp\{x}");
     }
 

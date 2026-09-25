@@ -314,3 +314,56 @@ fn a_bulged_polyline_in_a_rotated_block_counts_all_of_its_arc() {
         [5.0 - h, 5.0 - 2f64.sqrt(), 5.0 + 2f64.sqrt(), 5.0 + h],
     );
 }
+
+#[test]
+fn an_arc_whose_angles_are_a_whole_turn_apart_is_the_whole_circle() {
+    // 0 and 2 pi: the SVG arc command draws nothing between two equal
+    // points, so the circle is written as two halves -- and it counts its
+    // whole box.
+    let result = to_svg(
+        &db(vec![arc(0x10, 0.0, 2.0 * PI)], BTreeMap::new()),
+        ToSvgOptions {
+            space: Space::All,
+            padding: 0.0,
+            crop: Crop::Everything,
+            ..ToSvgOptions::default()
+        },
+    );
+    let path = result.svg.split("<path d=\"").nth(1).unwrap();
+    let path = &path[..path.find('"').unwrap()];
+    assert_eq!(path.matches('A').count(), 2, "{path}");
+    close(
+        extent(vec![arc(0x10, 0.0, 2.0 * PI)], BTreeMap::new()),
+        [-10.0, -10.0, 10.0, 10.0],
+    );
+}
+
+#[test]
+fn an_arc_whose_angles_are_more_than_a_turn_apart_runs_less_than_one() {
+    // 0 to 3 pi names the directions 0 to pi: the upper half.
+    close(
+        extent(vec![arc(0x10, 0.0, 3.0 * PI)], BTreeMap::new()),
+        [-10.0, 0.0, 10.0, 10.0],
+    );
+}
+
+#[test]
+fn an_arc_whose_angles_are_equal_is_not_drawn_and_is_named() {
+    let result = to_svg(
+        &db(
+            vec![arc(0x10, 1.0, 1.0), arc(0x11, 0.0, FRAC_PI_2)],
+            BTreeMap::new(),
+        ),
+        ToSvgOptions {
+            space: Space::All,
+            padding: 0.0,
+            crop: Crop::Everything,
+            ..ToSvgOptions::default()
+        },
+    );
+    assert_eq!(result.undefined_arcs, vec![EntityId::new(0x10)]);
+    assert_eq!(result.svg.matches("<path").count(), 1);
+    // The quarter alone makes the extent.
+    let v = result.view_box;
+    close([v.min_x, v.min_y, v.max_x, v.max_y], [0.0, 0.0, 10.0, 10.0]);
+}

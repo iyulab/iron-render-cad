@@ -38,6 +38,9 @@ bumps the minor version.
 
 ### Added
 
+- `ToSvgResult::undefined_arcs` (and the same field on `ToPngResult`): the ARCs that are not
+  drawn because their start and end angles are equal. The format does not say whether such an
+  arc is the whole circle or nothing.
 - `overlay_to_svg`: draws an `iron-diff-cad` change set on top of the original drawing -- each
   added, modified or removed entity in a proposal colour with a revision cloud -- and reports
   every change as marked or not marked with the reason (`OverlayOptions`, `OverlayFrame`).
@@ -63,6 +66,11 @@ bumps the minor version.
 
 ### Fixed
 
+- An ARC whose angles are a whole turn apart (0 and 360 degrees) is drawn as the whole circle.
+  Before, the SVG arc command, whose two ends were the same point, drew nothing. An ARC whose
+  angles are more than a turn apart counts only the arc it draws in the extent, not the whole
+  circle. Arc and ellipse sweeps now come from `uncad-model`, so every consumer of the model
+  measures the same arc.
 - Curves: a partial ELLIPSE is drawn as its arc, not a whole ellipse; a SPLINE along the curve
   its knots and weights define, not its control polygon; polyline and HATCH bulges as arcs,
   not chords; a HATCH spline edge along its NURBS curve.

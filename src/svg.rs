@@ -148,6 +148,12 @@ pub struct ToSvgResult {
     /// A block that exists but draws nothing is in
     /// [`empty_blocks`](Self::empty_blocks) instead.
     pub unresolved_block_refs: Vec<EntityId>,
+    /// The ARCs not drawn because their start and end angles are equal: the
+    /// format does not say whether such an arc is the whole circle or
+    /// nothing, and the model gives it no sweep
+    /// ([`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)). By
+    /// reference ID, sorted, each once. Never part of the extent.
+    pub undefined_arcs: Vec<EntityId>,
     /// What the renderer's bounds on numbers from the file left out of the
     /// picture -- empty for every well-formed drawing. See
     /// [`crate::limits`].
@@ -283,6 +289,9 @@ struct Ctx<'a> {
     /// Block references whose block the model does not hold (see
     /// `ToSvgResult::unresolved_block_refs`).
     unresolved_block_refs: BTreeSet<EntityId>,
+    /// ARCs left out because their two angles are equal (see
+    /// `ToSvgResult::undefined_arcs`).
+    undefined_arcs: BTreeSet<EntityId>,
     tables: &'a Tables,
     depth: u32,
     scale: f64,
@@ -385,6 +394,7 @@ impl<'a> Ctx<'a> {
             unsupported_types: self.unsupported.into_iter().collect(),
             empty_blocks: self.empty_blocks.into_iter().collect(),
             unresolved_block_refs: self.unresolved_block_refs.into_iter().collect(),
+            undefined_arcs: self.undefined_arcs.into_iter().collect(),
             limits: self.limits,
             hidden: self.hidden,
             undrawn_viewports: Vec::new(),
@@ -404,6 +414,7 @@ impl<'a> Ctx<'a> {
             unsupported: BTreeSet::new(),
             empty_blocks: BTreeSet::new(),
             unresolved_block_refs: BTreeSet::new(),
+            undefined_arcs: BTreeSet::new(),
             tables,
             depth: 0,
             scale: 1.0,
@@ -616,23 +627,6 @@ fn resolve_stroke_widths(body: &str, effective_stroke_width: f64) -> String {
 /// Points an ELLIPSE on a tilted plane is drawn through.
 const ELLIPSE_SAMPLES: usize = 64;
 
-/// How far an ELLIPSE runs, in its own parameter: `TAU` for a full ellipse,
-/// otherwise the counter-clockwise span from `start` to `end` in (0, TAU).
-/// DXF 41/42 are parameters of the ellipse, not polar angles, and the curve
-/// always runs counter-clockwise from the first to the second.
-fn ellipse_sweep(start: f64, end: f64) -> f64 {
-    let span = end - start;
-    if span.abs() < 1e-12 || (span.abs() - std::f64::consts::TAU).abs() < 1e-9 {
-        return std::f64::consts::TAU;
-    }
-    let sweep = span.rem_euclid(std::f64::consts::TAU);
-    if sweep < 1e-12 {
-        std::f64::consts::TAU
-    } else {
-        sweep
-    }
-}
-
 /// The point of an ELLIPSE at parameter `t`, seen from above.
 fn ellipse_point(el: &EllipseEntity, t: f64) -> Point2D {
     let q = el
@@ -640,13 +634,6 @@ fn ellipse_point(el: &EllipseEntity, t: f64) -> Point2D {
         .or_else(|| level_ellipse(el).point_at(t))
         .expect("the default normal names a plane");
     Point2D { x: q.x, y: q.y }
-}
-
-/// The minor axis of an ELLIPSE as a world vector.
-fn ellipse_minor_axis(el: &EllipseEntity) -> Point3D {
-    el.minor_axis()
-        .or_else(|| level_ellipse(el).minor_axis())
-        .expect("the default normal names a plane")
 }
 
 /// An ELLIPSE whose normal names no plane (zero or not finite) is drawn in
@@ -829,13 +816,11 @@ fn circle_in_own_plane(c: &CircleEntity, color: &str, ctx: &mut Ctx) -> String {
 /// runs clockwise in the world; on a tilted plane it is seen from above and
 /// drawn through points of its outline.
 ///
-/// Two angles a whole turn apart name the same direction, so the sweep is
-/// taken within one turn: a stored angle of any size makes no longer an
-/// outline, and no arc that goes round more than once.
-fn arc_in_own_plane(a: &ArcEntity, color: &str, ctx: &mut Ctx) -> String {
+/// `sweep` is the arc's own ([`ArcEntity::sweep`]): within one turn, and the
+/// whole circle for angles a whole turn apart.
+fn arc_in_own_plane(a: &ArcEntity, sweep: f64, color: &str, ctx: &mut Ctx) -> String {
     let plane = own_plane(a.extrusion);
     let frame = ctx.frame;
-    let sweep = (a.end_angle - a.start_angle).rem_euclid(std::f64::consts::TAU);
     let start = seen_from_above(plane, on_circle(a.center, a.radius, a.start_angle));
     let end = seen_from_above(plane, on_circle(a.center, a.radius, a.end_angle));
     if plane.is_flat() {
@@ -850,15 +835,25 @@ fn arc_in_own_plane(a: &ArcEntity, color: &str, ctx: &mut Ctx) -> String {
             sweep,
         ));
         let r = clean(a.radius);
-        let large = u8::from(sweep > std::f64::consts::PI);
         // Clockwise in the world, which the page's flipped y axis turns
         // counter-clockwise: SVG's sweep flag 1.
         return format!(
-            "<path d=\"M {} {} A {r} {r} 0 {large} 1 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+            "<path d=\"M {} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
             frame.x(start.x),
             frame.y(start.y),
-            frame.x(end.x),
-            frame.y(end.y)
+            arc_commands(
+                r,
+                1,
+                sweep,
+                end,
+                || {
+                    seen_from_above(
+                        plane,
+                        on_circle(a.center, a.radius, a.start_angle + std::f64::consts::PI),
+                    )
+                },
+                frame
+            )
         );
     }
     let steps = ((OWN_PLANE_SAMPLES as f64 * sweep / std::f64::consts::TAU).ceil() as usize).max(2);
@@ -870,6 +865,68 @@ fn arc_in_own_plane(a: &ArcEntity, color: &str, ctx: &mut Ctx) -> String {
         .collect();
     ctx.consider_all(&points);
     polyline_element(&points, false, color, frame)
+}
+
+/// An ARC in the world's plane, running counter-clockwise from its start
+/// angle by `sweep` ([`ArcEntity::sweep`]).
+fn world_arc(a: &ArcEntity, sweep: f64, color: &str, ctx: &mut Ctx) -> String {
+    let frame = ctx.frame;
+    let (x, y, r) = (a.center.x, a.center.y, a.radius);
+    let on_plane = |angle: f64| Point2D {
+        x: x + r * angle.cos(),
+        y: y + r * angle.sin(),
+    };
+    let (p1, p2) = (on_plane(a.start_angle), on_plane(a.end_angle));
+    // The arc's own extent, not the whole circle's: a large-radius fillet
+    // must not stretch the picture to its centre.
+    ctx.consider_box(&arc_extent(Point2D { x, y }, r, a.start_angle, sweep));
+    let r = clean(r);
+    // Counter-clockwise in the drawing is clockwise once y is flipped: SVG's
+    // sweep flag 0.
+    format!(
+        "<path d=\"M {} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+        frame.x(p1.x),
+        frame.y(p1.y),
+        arc_commands(
+            r,
+            0,
+            sweep,
+            p2,
+            || on_plane(a.start_angle + std::f64::consts::PI),
+            frame
+        )
+    )
+}
+
+/// The SVG arc commands that run a circular arc of radius `r` (as written)
+/// from the current point to `end` over `sweep` radians, in the direction
+/// `sweep_flag` names. A whole circle's two ends are the same point, which
+/// an SVG arc command draws nothing between, so it is written as two half
+/// circles through the point `half_way` gives.
+fn arc_commands(
+    r: f64,
+    sweep_flag: u8,
+    sweep: f64,
+    end: Point2D,
+    half_way: impl FnOnce() -> Point2D,
+    frame: Frame,
+) -> String {
+    if sweep >= std::f64::consts::TAU {
+        let mid = half_way();
+        return format!(
+            "A {r} {r} 0 0 {sweep_flag} {} {} A {r} {r} 0 0 {sweep_flag} {} {}",
+            frame.x(mid.x),
+            frame.y(mid.y),
+            frame.x(end.x),
+            frame.y(end.y)
+        );
+    }
+    let large = u8::from(sweep > std::f64::consts::PI);
+    format!(
+        "A {r} {r} 0 {large} {sweep_flag} {} {}",
+        frame.x(end.x),
+        frame.y(end.y)
+    )
 }
 
 /// The point at `angle` on the circle of `radius` about `center`, in the
@@ -1701,13 +1758,11 @@ fn arc_extent(center: Point2D, r: f64, start: f64, sweep: f64) -> Box2D {
     b
 }
 
-/// The extent of the elliptical arc from parameter `start` running `sweep`
-/// (`0 < sweep < 2 pi`), for an ellipse in a plane parallel to XY: its two
-/// ends plus whichever of the four points where `dx/dt` or `dy/dt` vanishes
-/// fall inside the sweep. `x(t) = cx + Mx cos t + nx sin t` is stationary
-/// where `tan t = nx / Mx`, i.e. at `atan2(nx, Mx)` and half a turn later;
-/// `y` likewise.
-fn ellipse_arc_extent(el: &EllipseEntity, start: f64, sweep: f64) -> Box2D {
+/// The extent of an ELLIPSE's arc: its two ends and the points where its
+/// world x or y turns within its sweep ([`EllipseEntity::extremes`]), for
+/// an ellipse in a plane parallel to XY. One whose normal names no plane is
+/// measured in the world's, as it is drawn ([`level_ellipse`]).
+fn ellipse_arc_extent(el: &EllipseEntity) -> Box2D {
     let mut b = Box2D {
         min_x: f64::INFINITY,
         max_x: f64::NEG_INFINITY,
@@ -1720,16 +1775,14 @@ fn ellipse_arc_extent(el: &EllipseEntity, start: f64, sweep: f64) -> Box2D {
         b.min_y = b.min_y.min(p.y);
         b.max_y = b.max_y.max(p.y);
     };
-    take(ellipse_point(el, start));
-    take(ellipse_point(el, start + sweep));
-    let (m, n) = (el.major_axis_endpoint, ellipse_minor_axis(el));
-    for base in [n.x.atan2(m.x), n.y.atan2(m.y)] {
-        for half_turn in [0.0, std::f64::consts::PI] {
-            let offset = (base + half_turn - start).rem_euclid(std::f64::consts::TAU);
-            if offset <= sweep + 1e-12 {
-                take(ellipse_point(el, start + offset));
-            }
-        }
+    take(ellipse_point(el, el.start_angle));
+    take(ellipse_point(el, el.start_angle + el.sweep()));
+    let turns = el
+        .extremes()
+        .or_else(|| level_ellipse(el).extremes())
+        .expect("the default normal names a plane");
+    for q in turns {
+        take(Point2D { x: q.x, y: q.y });
     }
     b
 }
@@ -1753,8 +1806,17 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         Entity::Circle(c) if !own_plane(c.extrusion).is_world() => {
             Some(circle_in_own_plane(c, &color, ctx))
         }
-        Entity::Arc(a) if !own_plane(a.extrusion).is_world() => {
-            Some(arc_in_own_plane(a, &color, ctx))
+        Entity::Arc(a) => {
+            let Some(sweep) = a.sweep() else {
+                // Equal angles: the file does not say whether this is the
+                // whole circle or nothing, so neither is drawn.
+                ctx.undefined_arcs.insert(a.common.id);
+                return None;
+            };
+            if !own_plane(a.extrusion).is_world() {
+                return Some(arc_in_own_plane(a, sweep, &color, ctx));
+            }
+            Some(world_arc(a, sweep, &color, ctx))
         }
         Entity::Circle(c) => {
             ctx.consider_box(&Box2D {
@@ -1770,37 +1832,13 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 clean(c.radius)
             ))
         }
-        Entity::Arc(a) => {
-            let (x, y, r) = (a.center.x, a.center.y, a.radius);
-            let on_plane = |angle: f64| Point2D {
-                x: x + r * angle.cos(),
-                y: y + r * angle.sin(),
-            };
-            let mut sweep = a.end_angle - a.start_angle;
-            if sweep < 0.0 {
-                sweep += 2.0 * std::f64::consts::PI;
-            }
-            let (p1, p2) = (on_plane(a.start_angle), on_plane(a.end_angle));
-            // The arc's own extent, not the whole circle's: a large-radius
-            // fillet must not stretch the picture to its centre.
-            ctx.consider_box(&arc_extent(Point2D { x, y }, r, a.start_angle, sweep));
-            let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
-            let r = clean(r);
-            Some(format!(
-                "<path d=\"M {} {} A {r} {r} 0 {large} 0 {} {}\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.x(p1.x),
-                frame.y(p1.y),
-                frame.x(p2.x),
-                frame.y(p2.y)
-            ))
-        }
         Entity::Ellipse(el) => {
             let rx = el.major_axis_endpoint.x.hypot(el.major_axis_endpoint.y);
             let ry = rx * el.axis_ratio;
             let theta = el.major_axis_endpoint.y.atan2(el.major_axis_endpoint.x);
             let rot = theta.to_degrees();
             let (cx, cy) = (frame.x(el.center.x), frame.y(el.center.y));
-            let sweep = ellipse_sweep(el.start_angle, el.end_angle);
+            let sweep = el.sweep();
             if sweep >= std::f64::consts::TAU {
                 // The box of the ellipse this element draws: semi-axes rx
                 // and ry turned by the major axis's angle.
@@ -1838,7 +1876,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 return Some(polyline_element(&points, false, &color, frame));
             }
             // The arc's own extent, not the whole ellipse's.
-            ctx.consider_box(&ellipse_arc_extent(el, el.start_angle, sweep));
+            ctx.consider_box(&ellipse_arc_extent(el));
             let (rx, ry) = (clean(rx), clean(ry.abs()));
             // A partial ellipse: the same exact arc command ARC uses, with
             // the axes and rotation of the ellipse. Counter-clockwise in the
@@ -2787,6 +2825,7 @@ fn svg_result(scene: Scene, stroke_width: Option<f64>) -> ToSvgResult {
         unsupported_types: scene.unsupported_types,
         empty_blocks: scene.empty_blocks,
         unresolved_block_refs: scene.unresolved_block_refs,
+        undefined_arcs: scene.undefined_arcs,
         limits: scene.limits,
         origin: scene.origin,
         hidden: scene.hidden,

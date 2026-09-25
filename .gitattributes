@@ -1,2 +1,6 @@
+# Text files are LF in the repository and in every checkout, whatever the
+# local core.autocrlf says. Lines further down override this one.
+* text=auto eol=lf
+
 # Golden fixtures are compared byte-for-byte with the writer output: never convert line endings.
 tests/golden/*.json -text

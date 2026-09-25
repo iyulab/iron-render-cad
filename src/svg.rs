@@ -628,35 +628,34 @@ fn ellipse_sweep(start: f64, end: f64) -> f64 {
     }
 }
 
-/// The point of an ELLIPSE at parameter `t`: `center + cos t * major + sin t
-/// * minor`, the minor axis being the major one turned a quarter turn
-/// counter-clockwise and scaled by `axis_ratio`.
+/// The point of an ELLIPSE at parameter `t`, seen from above.
 fn ellipse_point(el: &EllipseEntity, t: f64) -> Point2D {
-    let m = el.major_axis_endpoint;
-    let n = ellipse_minor_axis(el);
-    Point2D {
-        x: el.center.x + t.cos() * m.x + t.sin() * n.x,
-        y: el.center.y + t.cos() * m.y + t.sin() * n.y,
-    }
+    let q = el
+        .point_at(t)
+        .or_else(|| level_ellipse(el).point_at(t))
+        .expect("the default normal names a plane");
+    Point2D { x: q.x, y: q.y }
 }
 
-/// The minor axis as a world vector: the unit normal crossed with the major
-/// axis, scaled by `axis_ratio` -- the direction the parameters turn
-/// towards. With the default normal (0, 0, 1) that is the major axis turned
-/// a quarter turn counter-clockwise; a mirrored ellipse's (0, 0, -1) turns
-/// it the other way.
+/// The minor axis of an ELLIPSE as a world vector.
 fn ellipse_minor_axis(el: &EllipseEntity) -> Point3D {
-    let (m, e) = (el.major_axis_endpoint, el.extrusion);
-    let len = (e.x * e.x + e.y * e.y + e.z * e.z).sqrt();
-    let (nx, ny, nz) = if len > 0.0 && len.is_finite() {
-        (e.x / len, e.y / len, e.z / len)
-    } else {
-        (0.0, 0.0, 1.0)
-    };
-    Point3D {
-        x: (ny * m.z - nz * m.y) * el.axis_ratio,
-        y: (nz * m.x - nx * m.z) * el.axis_ratio,
-        z: (nx * m.y - ny * m.x) * el.axis_ratio,
+    el.minor_axis()
+        .or_else(|| level_ellipse(el).minor_axis())
+        .expect("the default normal names a plane")
+}
+
+/// An ELLIPSE whose normal names no plane (zero or not finite) is drawn in
+/// the world's, as though its normal were the default (0, 0, 1): the file's
+/// center and axes are world coordinates either way, and the model has no
+/// minor axis to give for it.
+fn level_ellipse(el: &EllipseEntity) -> EllipseEntity {
+    EllipseEntity {
+        extrusion: Point3D {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        },
+        ..el.clone()
     }
 }
 

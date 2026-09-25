@@ -3,13 +3,13 @@
 //!
 //! A spline stored by control points is a NURBS curve: its degree, knot
 //! vector and weights define it, and the control points do not lie on it.
-//! It is evaluated here with de Boor's algorithm in homogeneous coordinates
-//! (so weights are exact, not approximated), sampled at a fixed number of
-//! points per non-empty knot span. A spline stored by fit points only has no
-//! knots to evaluate; it is drawn through the fit points, which lie on the
-//! curve.
+//! The model evaluates it ([`Nurbs`]); what is chosen here is how densely --
+//! a fixed number of points per non-empty knot span. A spline stored by fit
+//! points only has no knots to evaluate; it is drawn through the fit points,
+//! which lie on the curve.
 
-use uncad_model::model::{Point2D, SplineEntity};
+use uncad_model::model::{Point2D, Point3D, SplineEntity};
+use uncad_model::Nurbs;
 
 /// Points sampled per non-empty knot span. Fixed, so the same spline always
 /// yields the same points.
@@ -33,8 +33,8 @@ pub(super) fn spline_points(s: &SplineEntity) -> Vec<Point2D> {
     source.iter().map(|p| Point2D { x: p.x, y: p.y }).collect()
 }
 
-/// The curve sampled by de Boor's algorithm, or `None` when the spline does
-/// not carry a complete NURBS definition.
+/// The curve sampled, or `None` when the spline does not carry a complete
+/// NURBS definition.
 fn evaluate(s: &SplineEntity) -> Option<Vec<Point2D>> {
     let control: Vec<Point2D> = s
         .control_points
@@ -45,81 +45,41 @@ fn evaluate(s: &SplineEntity) -> Option<Vec<Point2D>> {
 }
 
 /// A NURBS curve in the plane -- degree, knots, control points and weights
-/// (empty for a non-rational one, where every weight is 1) -- sampled by de
-/// Boor's algorithm, or `None` when those do not form a valid definition:
-/// the knot count must be control points + degree + 1, the knots
-/// non-decreasing and finite, and weights, when present, one per control
-/// point. Shared by SPLINE entities and HATCH spline edges.
+/// (empty for a non-rational one, where every weight is 1) -- sampled at
+/// [`SAMPLES_PER_SPAN`] points per non-empty knot span, or `None` when those
+/// do not define a curve (see [`Nurbs::new`]) or a sample falls at infinity.
+/// Shared by SPLINE entities and HATCH spline edges.
 pub(super) fn nurbs_points(
     degree: u32,
     knots: &[f64],
     control: &[Point2D],
     weights: &[f64],
 ) -> Option<Vec<Point2D>> {
-    let p = usize::try_from(degree).ok()?;
-    let n = control.len();
-    if p == 0 || n <= p || knots.len() != n + p + 1 {
-        return None;
-    }
-    if !weights.is_empty() && weights.len() != n {
-        return None;
-    }
-    if knots.windows(2).any(|k| k[1] < k[0]) || knots.iter().any(|k| !k.is_finite()) {
-        return None;
-    }
-    // Homogeneous control points: (w x, w y, w).
-    let homogeneous: Vec<[f64; 3]> = control
-        .iter()
-        .enumerate()
-        .map(|(i, c)| {
-            let w = weights.get(i).copied().unwrap_or(1.0);
-            [c.x * w, c.y * w, w]
-        })
-        .collect();
-    // The curve is defined on [knots[p], knots[n]]; span k is [knots[k], knots[k + 1]].
+    let curve = Nurbs::new(
+        degree,
+        knots,
+        control.iter().map(|c| Point3D {
+            x: c.x,
+            y: c.y,
+            z: 0.0,
+        }),
+        weights,
+    )?;
     let mut points = Vec::new();
-    for span in p..n {
-        let (a, b) = (knots[span], knots[span + 1]);
-        if b <= a {
-            continue;
-        }
-        let last = span + 1 == n || knots[span + 1..=n].iter().all(|&k| k == b);
-        let count = if last {
+    let mut spans = curve.spans().peekable();
+    while let Some((a, b)) = spans.next() {
+        let count = if spans.peek().is_none() {
             SAMPLES_PER_SPAN + 1
         } else {
             SAMPLES_PER_SPAN
         };
         for i in 0..count {
             let u = a + (b - a) * (i as f64 / SAMPLES_PER_SPAN as f64);
-            let [x, y, w] = de_boor(span, u, p, knots, &homogeneous);
-            if w == 0.0 || !w.is_finite() {
-                return None;
-            }
-            points.push(Point2D { x: x / w, y: y / w });
+            let q = curve.point_at(u)?;
+            points.push(Point2D { x: q.x, y: q.y });
         }
     }
     (points.len() >= 2).then_some(points)
-}
-
-/// The curve point at `u` in knot span `k` (`knots[k] <= u <= knots[k + 1]`).
-fn de_boor(k: usize, u: f64, p: usize, knots: &[f64], control: &[[f64; 3]]) -> [f64; 3] {
-    let mut d: Vec<[f64; 3]> = (0..=p).map(|j| control[j + k - p]).collect();
-    for r in 1..=p {
-        for j in (r..=p).rev() {
-            let i = j + k - p;
-            let denom = knots[i + p + 1 - r] - knots[i];
-            let alpha = if denom == 0.0 {
-                0.0
-            } else {
-                (u - knots[i]) / denom
-            };
-            let prev = d[j - 1];
-            for (value, before) in d[j].iter_mut().zip(prev) {
-                *value = (1.0 - alpha) * before + alpha * *value;
-            }
-        }
-    }
-    d[p]
 }
 
 #[cfg(test)]

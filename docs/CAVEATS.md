@@ -52,6 +52,9 @@ useful than a gap -- but a reader should know which parts are approximate:
   alone.
 - **LEADER arrowheads only where the file states one**: a leader whose file omits the
   arrowhead flag is drawn without an arrowhead.
+- **A table's block as based at the origin**: an ACAD_TABLE's block is placed without its
+  base point (a block reference's is put on its insertion point). Every table block seen so
+  far is based at the origin.
 - **A spline LEADER through its vertices**: a leader whose path is a spline is drawn as
   straight segments through its vertices. The file stores the vertices the spline passes
   through, not the curve between them, which the drawing program fits.

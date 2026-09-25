@@ -2178,6 +2178,9 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             });
             Some(render_block_ref(e, &i.block_name, placement, &color, ctx))
         }
+        // A table's block is placed as though based at the origin: the
+        // block's base point is not applied here, unlike a block
+        // reference's. Every table block seen so far is based there.
         Entity::AcadTable(a) => Some(render_block_ref(
             e,
             &a.block_name,

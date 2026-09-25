@@ -52,6 +52,9 @@ useful than a gap -- but a reader should know which parts are approximate:
   alone.
 - **LEADER arrowheads only where the file states one**: a leader whose file omits the
   arrowhead flag is drawn without an arrowhead.
+- **A spline LEADER through its vertices**: a leader whose path is a spline is drawn as
+  straight segments through its vertices. The file stores the vertices the spline passes
+  through, not the curve between them, which the drawing program fits.
 - **Text codes are decoded to what they show, not drawn as formatting**: MTEXT paragraph
   breaks become lines (a blank paragraph keeps its line), stacked text is drawn inline as
   `top/bottom` and a stacked fraction reads `3 1/2` rather than `31/2`, format codes (font,

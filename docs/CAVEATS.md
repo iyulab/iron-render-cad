@@ -375,6 +375,18 @@ for a turned text it is the box of its turned outline box. Every `<text>` carrie
 of the entity that drew it as its `id` (`t` and the reference IDs, outermost block
 reference first), which is how the two are matched.
 
+## The overlay
+
+`overlay_to_svg` renders both states once each and assembles one document from the two.
+
+- **The original layer is the original render.** With no change outside the original's view box, it is `to_svg`'s body byte for byte; a test holds it to that. A change that reaches further grows the view box, and the original layer is then the same render written for the larger window -- construction lines (RAY, XLINE) are cut to that window, so their end points differ.
+- **The change layer draws outlines and text only.** One style rule paints every stroke and text of the layer in the proposal colour and turns fills off, so a solid or a hatch that changed is drawn as its outline. Hatch patterns are not repeated in the proposal colour.
+- **A change inside a block definition is reported, not drawn** (`NOT_TOP_LEVEL`). Every reference to the block places the entity somewhere else, and choosing one of those places would be a guess.
+- **A change the render drew nothing for is reported** (`NOTHING_DRAWN`): an entity type this renderer does not draw, one the drawing hides, one a bound left out -- in both states.
+- **An undecided counterpart is never drawn.** An `UNKNOWN` change gets a dashed cloud around the entity and every candidate; none of the candidates is drawn as what it became.
+- **The revision cloud is arithmetic.** It sits 10 stroke widths outside the box it marks. Each side is cut into equal chords of about 16 stroke widths, at most 100 a side, and each chord bows outward as a circular arc of radius 0.6 chords.
+- **Confidence is not shown**, here or in a plain render: principle 4 is not implemented yet, since every entity a vector reader produces is high-confidence. When a low-confidence producer exists, the overlay will need the same treatment as the render.
+
 ## No image comparison, by design
 
 No test in this crate decides pass/fail by comparing rendered images, and the crate has no

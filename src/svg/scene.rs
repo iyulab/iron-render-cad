@@ -26,7 +26,7 @@ use uncad_model::CadDatabase;
 
 /// An axis-aligned rectangle of the drawing, in drawing units with y up --
 /// the world a render shows, or the paper of a layout's sheet.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct Rect {
     pub min_x: f64,
     pub min_y: f64,
@@ -229,7 +229,7 @@ pub struct Scene {
 
 /// The document-frame viewBox `[x, y, width, height]` of `window` for a
 /// render written about `origin`.
-fn doc_view_box(window: &Rect, origin: Point2D) -> [f64; 4] {
+pub(super) fn doc_view_box(window: &Rect, origin: Point2D) -> [f64; 4] {
     [
         window.min_x - origin.x,
         origin.y - window.max_y,
@@ -357,12 +357,7 @@ impl Scene {
     /// The document of every part the crop did not set aside, at
     /// `stroke_width`: what [`crate::to_svg`] writes.
     pub(crate) fn document(&self, stroke_width: f64) -> String {
-        self.assemble(self.doc_view_box, stroke_width, |i| {
-            !matches!(
-                self.parts[i].left_out,
-                Some(LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier)
-            )
-        })
+        self.assemble(self.doc_view_box, stroke_width, |i| self.in_document(i))
     }
 
     /// [`view_box`](Self::view_box) as the document writes it.
@@ -373,6 +368,25 @@ impl Scene {
     /// The document with viewBox `[x, y, width, height]` (document frame)
     /// holding the parts `keep` accepts by index.
     fn assemble(
+        &self,
+        view_box: [f64; 4],
+        stroke_width: f64,
+        keep: impl Fn(usize) -> bool,
+    ) -> String {
+        let [x, y, width, height] = view_box;
+        let defs_block = self.defs_block(stroke_width);
+        let resolved_body = self.layer(view_box, stroke_width, keep);
+        format!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>"
+        )
+    }
+
+    /// The elements of the parts `keep` accepts by index, in drawing order,
+    /// for a document with viewBox `[x, y, width, height]` (document frame)
+    /// at `stroke_width`: stroke widths resolved and construction lines cut
+    /// to that window. What a document holds between its `<defs>` and its
+    /// end.
+    pub(super) fn layer(
         &self,
         [x, y, width, height]: [f64; 4],
         stroke_width: f64,
@@ -385,21 +399,30 @@ impl Scene {
             .filter(|(i, svg)| !svg.is_empty() && keep(*i))
             .map(|(_, svg)| svg.as_str())
             .collect();
-        let resolved_body = infinite::resolve(
+        infinite::resolve(
             resolve_stroke_widths(&body.join("\n  "), stroke_width),
             infinite::window(x, y, width, height, stroke_width),
-        );
-        // HATCH pattern defs carry stroke-width placeholders too. Kept
-        // separate from the body only so an empty defs list emits no
-        // <defs> block at all.
-        let defs_block = if self.defs.is_empty() {
+        )
+    }
+
+    /// The `<defs>` block and the indent after it, or nothing when the
+    /// scene defines nothing. HATCH pattern defs carry stroke-width
+    /// placeholders too; an empty defs list emits no block at all.
+    pub(super) fn defs_block(&self, stroke_width: f64) -> String {
+        if self.defs.is_empty() {
             String::new()
         } else {
             let resolved_defs = resolve_stroke_widths(&self.defs.join("\n  "), stroke_width);
             format!("<defs>\n  {resolved_defs}\n</defs>\n  ")
-        };
-        format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>"
+        }
+    }
+
+    /// Whether [`crate::to_svg`]'s document holds part `i`: every part but
+    /// the outliers the crop set aside.
+    pub(super) fn in_document(&self, i: usize) -> bool {
+        !matches!(
+            self.parts[i].left_out,
+            Some(LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier)
         )
     }
 }

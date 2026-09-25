@@ -31,6 +31,7 @@ mod format;
 mod hatch;
 mod infinite;
 mod justify;
+mod overlay;
 mod scene;
 mod sheet;
 mod spline;
@@ -38,6 +39,10 @@ mod text_codes;
 mod visibility;
 
 pub use crop::{Crop, CropReport, LeftOut, LeftOutReason};
+pub use overlay::{
+    overlay_to_svg, Mark, MarkKind, NotMarked, NotMarkedReason, OverlayOptions, OverlayResult,
+    DEFAULT_PROPOSAL_COLOR,
+};
 pub use scene::{Part, Rect, Scene, TextBox};
 pub(crate) use sheet::render_layout;
 pub use sheet::{LayoutError, SheetSource, ViewportReport};

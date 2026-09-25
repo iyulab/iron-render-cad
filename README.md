@@ -21,7 +21,7 @@ Input is expressed in the [uncad-model](https://github.com/iyulab/uncad-model) e
 
 ## Status
 
-0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything) -- `layout_to_svg` and `layout_to_png` one paper layout as its sheet, with the model shown through its viewports -- report the entity types they could not draw, the block references that drew nothing, what the bounds on the file's numbers left out and how much the drawing itself hides (layers off, frozen or not plotted, invisible entities) and which entities the picture's frame leaves out and why, and are deterministic byte for byte. A `Scene` keeps one render, one part per top-level entity with the box of the world it covers, and writes a document of any window from any subset of those parts -- tiles of a large plan without walking it once per tile -- and draws any `View` of it, a grid of pixels laid over the world that also says which world point each pixel shows, and says where each of its texts lands with a given set of fonts. A malformed drawing may cost a missing entity and a note saying so, never the process. The overlay (change set on top of the original) is not implemented yet. The design principles are
+0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything) -- `layout_to_svg` and `layout_to_png` one paper layout as its sheet, with the model shown through its viewports -- report the entity types they could not draw, the block references that drew nothing, what the bounds on the file's numbers left out and how much the drawing itself hides (layers off, frozen or not plotted, invisible entities) and which entities the picture's frame leaves out and why, and are deterministic byte for byte. A `Scene` keeps one render, one part per top-level entity with the box of the world it covers, and writes a document of any window from any subset of those parts -- tiles of a large plan without walking it once per tile -- and draws any `View` of it, a grid of pixels laid over the world that also says which world point each pixel shows, and says where each of its texts lands with a given set of fonts. A malformed drawing may cost a missing entity and a note saying so, never the process. `overlay_to_svg` draws a change set on top of the original: the original layer exactly as `to_svg` draws it, and above it, in one proposal colour, what each entity became, what was removed (dashed) and a revision cloud around every change; a change whose counterpart is undecided gets a dashed cloud and no geometry, and a change the picture cannot show is reported with the reason. The design principles are
 in [docs/principles.md](docs/principles.md); what is approximated and what is unverified is in
 [docs/CAVEATS.md](docs/CAVEATS.md).
 
@@ -47,6 +47,20 @@ let png = scene.png(&view, 1.25, &Fonts::System, Background::White, |part| {
 })?;
 for text in scene.text_boxes(&Fonts::System)? {
     println!("{:?} {:?} {:?}", text.path, text.text, text.measured);
+}
+```
+
+Draw an edit on top of the drawing it was made to -- the change set comes from
+[iron-diff-cad](https://github.com/iyulab/iron-diff-cad):
+
+```rust
+use iron_render_cad::{overlay_to_svg, OverlayOptions};
+
+let changes = iron_diff_cad::diff(&before, &after, iron_diff_cad::DiffOptions::default());
+let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+std::fs::write("redline.svg", &overlay.svg)?;
+for m in &overlay.not_marked {
+    println!("change {} ({:?}) not drawn: {:?}", m.entry, m.id, m.reason);
 }
 ```
 

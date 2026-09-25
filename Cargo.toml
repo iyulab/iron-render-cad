@@ -32,6 +32,10 @@ uncad-model = "0.1.0"
 # SVG -> PNG. One crate rather than separate usvg / tiny-skia / fontdb: resvg
 # re-exports all three, which keeps them in lock step.
 resvg = "0.48"
+# The change set an overlay draws. A version dependency, like the model.
+iron-diff-cad = "0.1.0"
+# The overlay's report serializes as JSON, the way the change set does.
+serde = { version = "1.0.229", features = ["derive"] }
 
 [dev-dependencies]
 serde_json = "1.0.151"

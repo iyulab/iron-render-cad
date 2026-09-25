@@ -110,6 +110,7 @@ fn db(entities: Vec<Entity>, blocks: Vec<(&str, Vec<Entity>)>) -> CadDatabase {
                     (
                         name.to_string(),
                         BlockRecord {
+                            base_point: Default::default(),
                             name: name.to_string(),
                             entities,
                         },

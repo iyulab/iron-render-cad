@@ -94,6 +94,7 @@ fn drawing(dxf_shape: bool) -> CadDatabase {
     block_records.insert(
         "TITLE".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "TITLE".to_string(),
             entities: title,
         },
@@ -101,6 +102,7 @@ fn drawing(dxf_shape: bool) -> CadDatabase {
     block_records.insert(
         "TAG".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "TAG".to_string(),
             entities: vec![Entity::Circle(CircleEntity {
                 common: common(0x70),

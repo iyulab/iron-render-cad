@@ -60,6 +60,7 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
     block_records.insert(
         "DOOR".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "DOOR".to_string(),
             entities: vec![Entity::Line(LineEntity {
                 common: common(0x70),
@@ -71,6 +72,7 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
     block_records.insert(
         "TWICE".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "TWICE".to_string(),
             entities: vec![insert(0x71, Ref::Resolved("NOWHERE".to_string()))],
         },
@@ -78,6 +80,7 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
     block_records.insert(
         "EMPTY".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "EMPTY".to_string(),
             entities: Vec::new(),
         },

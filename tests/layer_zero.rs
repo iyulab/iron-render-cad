@@ -86,6 +86,7 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
     block_records.insert(
         "SYMBOL".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "SYMBOL".to_string(),
             entities: vec![
                 line(0x50, "0", 1.0),
@@ -97,6 +98,7 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
     block_records.insert(
         "INNER".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "INNER".to_string(),
             entities: vec![line(0x60, "0", 3.0)],
         },

@@ -2164,8 +2164,14 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             // mirror copy's -- the model places the block exactly. A tilted
             // plane has no exact 2D placement: the block is placed in its
             // plane and that plane seen from above, as a HATCH is.
-            let placement = i.world_transform().unwrap_or_else(|| {
-                i.transform().then(&plane_seen_from_above(
+            // The block's base point lands on the insertion point.
+            let base = i
+                .block_name
+                .resolved()
+                .and_then(|name| ctx.tables.block_records.get(name))
+                .map_or_else(Point3D::default, |block| block.base_point);
+            let placement = i.world_transform(base).unwrap_or_else(|| {
+                i.transform(base).then(&plane_seen_from_above(
                     own_plane(i.extrusion),
                     i.insertion_point.z,
                 ))
@@ -2846,6 +2852,7 @@ mod tests {
         block_records.insert(
             "R".to_string(),
             BlockRecord {
+                base_point: Default::default(),
                 name: "R".to_string(),
                 entities: children,
             },
@@ -3306,6 +3313,7 @@ mod tests {
         block_records.insert(
             "M".to_string(),
             BlockRecord {
+                base_point: Default::default(),
                 name: "M".to_string(),
                 entities: vec![line],
             },
@@ -3950,7 +3958,9 @@ mod tests {
                 attribs: Vec::new(),
                 extrusion: normal,
             };
-            let model = insert.world_transform().expect("a flat plane");
+            let model = insert
+                .world_transform(Point3D::default())
+                .expect("a flat plane");
             let ours = plane_seen_from_above(Ocs::of(normal).unwrap(), 2.5);
             for (a, b) in [
                 (model.a, ours.a),

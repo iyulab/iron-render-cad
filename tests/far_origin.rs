@@ -71,6 +71,7 @@ fn far_drawing() -> CadDatabase {
     block_records.insert(
         "TICK".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "TICK".to_string(),
             entities: vec![line(0x50, (0.0, 0.0), (2.0, 2.0))],
         },
@@ -78,6 +79,7 @@ fn far_drawing() -> CadDatabase {
     block_records.insert(
         "*D1".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "*D1".to_string(),
             entities: vec![line(0x51, (FAR + 10.0, FAR), (FAR + 90.0, FAR))],
         },

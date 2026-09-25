@@ -52,6 +52,7 @@ fn block(name: &str, entities: Vec<Entity>) -> (String, BlockRecord) {
     (
         name.to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: name.to_string(),
             entities,
         },

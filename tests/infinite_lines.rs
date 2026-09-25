@@ -167,6 +167,7 @@ fn an_xline_inside_a_placed_block_is_cut_in_the_documents_frame() {
     blocks.insert(
         "B".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "B".to_string(),
             entities: vec![ray(0x50, true, (0.0, 0.0), (1.0, 0.0))],
         },

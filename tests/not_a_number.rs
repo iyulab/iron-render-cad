@@ -60,6 +60,7 @@ fn a_non_finite_coordinate_never_reaches_an_svg_attribute() {
     block_records.insert(
         "B".to_string(),
         BlockRecord {
+            base_point: Default::default(),
             name: "B".to_string(),
             entities: vec![line(0x50, (0.0, 0.0), (10.0, 10.0))],
         },

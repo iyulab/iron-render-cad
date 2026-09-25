@@ -464,9 +464,9 @@ impl<'a> Ctx<'a> {
     /// transform) are dropped rather than recorded: letting `Infinity` into the
     /// running bounds can pin both the min and the max to `Infinity` (the
     /// min-side update never fires because `Infinity < Infinity` is false),
-    /// and the box's diagonal then computes as `NaN`, which panics the
-    /// `partial_cmp(..).unwrap()` calls in [`bounds`] instead of just rendering
-    /// a degenerate point.
+    /// and the box's diagonal then computes as `NaN`, which the sorts in
+    /// [`bounds`] would then rank as a real size and let pick the drawing's
+    /// main cluster, instead of just rendering a degenerate point.
     fn consider(&mut self, local_x: f64, local_y: f64) {
         let Point2D { x, y } = self.transform.apply(Point2D {
             x: local_x,

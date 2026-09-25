@@ -68,8 +68,8 @@ fn cluster_entity_boxes(boxes: &[Box2D]) -> Vec<Vec<Box2D>> {
 
     let mut all_x: Vec<f64> = boxes.iter().flat_map(|b| [b.min_x, b.max_x]).collect();
     let mut all_y: Vec<f64> = boxes.iter().flat_map(|b| [b.min_y, b.max_y]).collect();
-    all_x.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    all_y.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    all_x.sort_by(f64::total_cmp);
+    all_y.sort_by(f64::total_cmp);
 
     // The interquartile span, not the full extent: one far-away outlier must
     // not inflate the epsilon that decides what counts as "touching".
@@ -180,14 +180,14 @@ pub(super) fn dominant_cluster_box(boxes: &[Box2D]) -> Option<Box2D> {
     }
 
     let score = |group: &[Box2D]| group.len() as f64 * diag(&bbox_of(group));
-    clusters.sort_by(|a, b| score(b).partial_cmp(&score(a)).unwrap());
+    clusters.sort_by(|a, b| score(b).total_cmp(&score(a)));
 
     let mut seed = clusters[0].clone();
     let mut seed_box = bbox_of(&seed);
     let mut rest: Vec<Vec<Box2D>> = clusters[1..].to_vec();
 
     let mut diags: Vec<f64> = clusters.iter().map(|c| diag(&bbox_of(c))).collect();
-    diags.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    diags.sort_by(f64::total_cmp);
     let typical_cluster_scale = diags.get(clusters.len() / 2).copied().unwrap_or(0.0);
 
     loop {

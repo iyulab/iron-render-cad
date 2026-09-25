@@ -349,3 +349,68 @@ fn a_grown_view_draws_the_original_as_the_same_render_of_the_larger_window() {
     let original = format!("<g id=\"original\">\n  {}\n</g>", body(&alone));
     assert!(overlay.svg.contains(&original));
 }
+
+#[test]
+fn framing_the_changes_shows_them_at_a_readable_size() {
+    use iron_render_cad::{LeftOutReason, OverlayFrame, Scene};
+    let before_json = g1_json();
+    let mut after_json = before_json.clone();
+    edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, DiffOptions::default());
+    let whole = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+    let framed = overlay_to_svg(
+        &before,
+        &after,
+        &changes,
+        OverlayOptions {
+            frame: OverlayFrame::Changes,
+            ..OverlayOptions::default()
+        },
+    );
+    let cloud = framed.marked[0].cloud;
+    let v = framed.view_box;
+    // The window holds the change and some of the drawing around it...
+    assert!(
+        v.min_x < cloud.min_x && cloud.max_x < v.max_x,
+        "{v:?} {cloud:?}"
+    );
+    assert!(
+        v.min_y < cloud.min_y && cloud.max_y < v.max_y,
+        "{v:?} {cloud:?}"
+    );
+    // ...and is far smaller than the whole drawing, at a finer stroke.
+    assert!(v.width() < whole.view_box.width() / 4.0, "{v:?}");
+    assert!(framed.stroke_width < whole.stroke_width);
+
+    // The original layer is the same render, written for that window.
+    let scene = Scene::new(&before, ToSvgOptions::default());
+    let alone = scene.svg(v, framed.stroke_width, |p| {
+        !matches!(
+            p.left_out,
+            Some(LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier)
+        )
+    });
+    assert!(framed
+        .svg
+        .contains(&format!("<g id=\"original\">\n  {}\n</g>", body(&alone))));
+}
+
+#[test]
+fn framing_no_changes_shows_the_whole_drawing() {
+    use iron_render_cad::OverlayFrame;
+    let before = model(&g1_json());
+    let changes = diff(&before, &before, DiffOptions::default());
+    let framed = overlay_to_svg(
+        &before,
+        &before,
+        &changes,
+        OverlayOptions {
+            frame: OverlayFrame::Changes,
+            ..OverlayOptions::default()
+        },
+    );
+    let alone = to_svg(&before, ToSvgOptions::default());
+    assert_eq!(framed.view_box, alone.view_box);
+    assert!(framed.svg.contains(body(&alone.svg)));
+}

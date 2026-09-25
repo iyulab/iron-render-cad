@@ -32,6 +32,25 @@ pub struct OverlayOptions {
     pub svg: ToSvgOptions,
     /// The sRGB colour every mark of the change layer is drawn in.
     pub proposal_color: [u8; 3],
+    /// What the picture frames.
+    pub frame: OverlayFrame,
+}
+
+/// What an overlay's picture frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum OverlayFrame {
+    /// The whole drawing, as [`crate::to_svg`] frames it, grown to take in
+    /// any change that reaches outside it.
+    #[default]
+    Drawing,
+    /// The changes: every revision cloud, with as much of the drawing
+    /// around them again as their box is wide (half its longer side on each
+    /// side, but not past what the whole drawing's view shows), drawn at the
+    /// stroke width the whole drawing's render would have for a view that
+    /// size. A change in a large drawing is otherwise a few pixels of it.
+    /// With nothing marked, the whole drawing.
+    Changes,
 }
 
 impl Default for OverlayOptions {
@@ -39,6 +58,7 @@ impl Default for OverlayOptions {
         OverlayOptions {
             svg: ToSvgOptions::default(),
             proposal_color: DEFAULT_PROPOSAL_COLOR,
+            frame: OverlayFrame::Drawing,
         }
     }
 }
@@ -117,6 +137,10 @@ pub struct OverlayResult {
     /// The world point the document's coordinates are written relative to
     /// -- the original render's, see [`crate::ToSvgResult::origin`].
     pub origin: Point2D,
+    /// The stroke width the document is drawn at, in drawing units: what a
+    /// caller adding its own marks (a revision symbol by a cloud) sizes
+    /// them by.
+    pub stroke_width: f64,
 }
 
 /// Draws `changes` -- the change set from `before` to `after`, as
@@ -149,7 +173,6 @@ pub fn overlay_to_svg(
 ) -> OverlayResult {
     let b = Scene::new(before, options.svg);
     let a = Scene::new(after, options.svg);
-    let stroke_width = options.svg.stroke_width.unwrap_or(b.auto_stroke_width);
     let b_parts = top_level(&b);
     let a_parts = top_level(&a);
 
@@ -231,14 +254,41 @@ pub fn overlay_to_svg(
         });
     }
 
-    // The window: the original's view box, grown to take in every cloud
-    // with its margin. Written exactly as the original render framed it
-    // when nothing grew it.
-    let margin = cloud_margin(stroke_width);
-    let window = clouds
-        .iter()
-        .map(|(r, _)| pad(*r, margin))
-        .fold(b.view_box, union);
+    // The window, and the stroke width that goes with it.
+    let changed = clouds.iter().map(|(r, _)| *r).reduce(union);
+    let (window, stroke_width) = match (options.frame, changed) {
+        (OverlayFrame::Changes, Some(changed)) => {
+            let window = around(changed, &b.view_box);
+            // The whole render's stroke for its view box, scaled to this
+            // one's: the lines keep the weight they have in the whole picture
+            // seen at the same size.
+            let ratio = b.auto_stroke_width / diagonal(&b.view_box);
+            let auto = if ratio.is_finite() && ratio > 0.0 {
+                diagonal(&window) * ratio
+            } else {
+                b.auto_stroke_width
+            };
+            let stroke_width = options.svg.stroke_width.unwrap_or(auto);
+            let margin = cloud_margin(stroke_width);
+            let window = clouds
+                .iter()
+                .map(|(r, _)| pad(*r, margin))
+                .fold(window, union);
+            (window, stroke_width)
+        }
+        _ => {
+            // The original's view box, grown to take in every cloud with its
+            // margin. Written exactly as the original render framed it when
+            // nothing grew it.
+            let stroke_width = options.svg.stroke_width.unwrap_or(b.auto_stroke_width);
+            let margin = cloud_margin(stroke_width);
+            let window = clouds
+                .iter()
+                .map(|(r, _)| pad(*r, margin))
+                .fold(b.view_box, union);
+            (window, stroke_width)
+        }
+    };
     let view_box = if window == b.view_box {
         b.doc_view_box
     } else {
@@ -265,7 +315,11 @@ pub fn overlay_to_svg(
     }
     for (rect, dashed) in &clouds {
         let class = if *dashed { "cloud unknown" } else { "cloud" };
-        let d = cloud_path(pad(*rect, margin), b.origin, stroke_width);
+        let d = cloud_path(
+            pad(*rect, cloud_margin(stroke_width)),
+            b.origin,
+            stroke_width,
+        );
         let _ = write!(layer, "\n  <path class=\"{class}\" d=\"{d}\"/>");
     }
 
@@ -291,6 +345,7 @@ pub fn overlay_to_svg(
         not_marked,
         view_box: window,
         origin: b.origin,
+        stroke_width,
     }
 }
 
@@ -338,6 +393,33 @@ fn union(a: Rect, b: Rect) -> Rect {
         a.max_x.max(b.max_x),
         a.max_y.max(b.max_y),
     )
+}
+
+fn diagonal(r: &Rect) -> f64 {
+    r.width().hypot(r.height())
+}
+
+/// The window [`OverlayFrame::Changes`] shows around `changed`: half the longer
+/// side again on each side, but no more of the drawing than its whole view
+/// shows. A box with no extent -- one point changed -- gets a window a
+/// fiftieth of the whole drawing's diagonal across.
+fn around(changed: Rect, drawing: &Rect) -> Rect {
+    let longer = changed.width().max(changed.height());
+    let context = if longer > 0.0 {
+        longer / 2.0
+    } else {
+        diagonal(drawing) / 100.0
+    };
+    let wanted = pad(changed, context);
+    // The context is cut to the drawing; the change itself never is (the
+    // clouds are added back by the caller).
+    let cut = Rect::new(
+        wanted.min_x.max(drawing.min_x.min(changed.min_x)),
+        wanted.min_y.max(drawing.min_y.min(changed.min_y)),
+        wanted.max_x.min(drawing.max_x.max(changed.max_x)),
+        wanted.max_y.min(drawing.max_y.max(changed.max_y)),
+    );
+    union(cut, changed)
 }
 
 fn pad(r: Rect, by: f64) -> Rect {

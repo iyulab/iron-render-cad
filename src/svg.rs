@@ -40,8 +40,8 @@ mod visibility;
 
 pub use crop::{Crop, CropReport, LeftOut, LeftOutReason};
 pub use overlay::{
-    overlay_to_svg, Mark, MarkKind, NotMarked, NotMarkedReason, OverlayOptions, OverlayResult,
-    DEFAULT_PROPOSAL_COLOR,
+    overlay_to_svg, Mark, MarkKind, NotMarked, NotMarkedReason, OverlayFrame, OverlayOptions,
+    OverlayResult, DEFAULT_PROPOSAL_COLOR,
 };
 pub use scene::{Part, Rect, Scene, TextBox};
 pub(crate) use sheet::render_layout;

@@ -327,3 +327,25 @@ fn the_change_layer_is_drawn_in_the_proposal_colour_when_rasterized() {
     assert!(found.len() >= 2, "the hole and its cloud: {found:?}");
     assert!(found.iter().all(|&c| c == (0xe4, 0x00, 0x2b)), "{found:?}");
 }
+
+#[test]
+fn a_grown_view_draws_the_original_as_the_same_render_of_the_larger_window() {
+    use iron_render_cad::{LeftOutReason, Scene};
+    let before_json = g1_json();
+    let mut after_json = before_json.clone();
+    add_hole(&mut after_json, 301);
+    edit(&mut after_json, 301, &|e| e["center"]["x"] = 1000.0.into());
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, DiffOptions::default());
+    let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+
+    let scene = Scene::new(&before, ToSvgOptions::default());
+    let alone = scene.svg(overlay.view_box, scene.auto_stroke_width, |p| {
+        !matches!(
+            p.left_out,
+            Some(LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier)
+        )
+    });
+    let original = format!("<g id=\"original\">\n  {}\n</g>", body(&alone));
+    assert!(overlay.svg.contains(&original));
+}

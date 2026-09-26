@@ -17,7 +17,7 @@ use uncad_model::model::{
     DimensionEntity, DimensionPoints, Entity, EntityCommon, InsertEntity, LineEntity, Point2D,
     Point3D, Ref, TextOverride,
 };
-use uncad_model::tables::{BlockRecord, Tables};
+use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 const FAR: f64 = 2.5e8;
@@ -59,19 +59,14 @@ fn far_drawing() -> CadDatabase {
     let mut block_records = BTreeMap::new();
     block_records.insert(
         "TICK".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "TICK".to_string(),
-            entities: vec![line(0x50, (0.0, 0.0), (2.0, 2.0))],
-        },
+        common::block_record("TICK", vec![line(0x50, (0.0, 0.0), (2.0, 2.0))]),
     );
     block_records.insert(
         "*D1".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "*D1".to_string(),
-            entities: vec![line(0x51, (FAR + 10.0, FAR), (FAR + 90.0, FAR))],
-        },
+        common::block_record(
+            "*D1",
+            vec![line(0x51, (FAR + 10.0, FAR), (FAR + 90.0, FAR))],
+        ),
     );
     CadDatabase {
         entities: vec![

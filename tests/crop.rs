@@ -17,7 +17,7 @@ use iron_render_cad::{
 use uncad_model::model::{
     Entity, EntityCommon, EntityId, InsertEntity, LineEntity, Point3D, RayEntity, Ref,
 };
-use uncad_model::tables::{BlockRecord, Tables};
+use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
@@ -57,16 +57,7 @@ fn db(entities: Vec<Entity>, blocks: Vec<(&str, Vec<Entity>)>) -> CadDatabase {
         tables: Tables {
             block_records: blocks
                 .into_iter()
-                .map(|(name, entities)| {
-                    (
-                        name.to_string(),
-                        BlockRecord {
-                            base_point: Default::default(),
-                            name: name.to_string(),
-                            entities,
-                        },
-                    )
-                })
+                .map(|(name, entities)| (name.to_string(), common::block_record(name, entities)))
                 .collect::<BTreeMap<_, _>>(),
             ..Tables::default()
         },

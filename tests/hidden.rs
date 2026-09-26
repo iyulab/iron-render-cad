@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use iron_render_cad::{to_png, to_svg, Crop, Space, ToPngOptions, ToSvgOptions, ToSvgResult};
 use uncad_model::model::{Entity, EntityCommon, InsertEntity, LineEntity, Point3D, Ref};
-use uncad_model::tables::{BlockRecord, LayerRecord, Tables};
+use uncad_model::tables::{LayerRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn options(space: Space, include_hidden: bool) -> ToSvgOptions {
@@ -160,16 +160,7 @@ fn db(entities: Vec<Entity>, blocks: Vec<(&str, Vec<Entity>)>) -> CadDatabase {
             ]),
             block_records: blocks
                 .into_iter()
-                .map(|(name, entities)| {
-                    (
-                        name.to_string(),
-                        BlockRecord {
-                            base_point: Default::default(),
-                            name: name.to_string(),
-                            entities,
-                        },
-                    )
-                })
+                .map(|(name, entities)| (name.to_string(), common::block_record(name, entities)))
                 .collect(),
             ..Tables::default()
         },

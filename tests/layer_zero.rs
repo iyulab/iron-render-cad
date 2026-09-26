@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use iron_render_cad::{to_svg, Space, ToSvgOptions};
 use uncad_model::model::{Entity, EntityCommon, InsertEntity, LineEntity, Point3D, Ref};
-use uncad_model::tables::{BlockRecord, LayerRecord, Tables};
+use uncad_model::tables::{LayerRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 /// A BYLAYER entity on `layer`.
@@ -72,23 +72,18 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
     let mut block_records = BTreeMap::new();
     block_records.insert(
         "SYMBOL".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "SYMBOL".to_string(),
-            entities: vec![
+        common::block_record(
+            "SYMBOL",
+            vec![
                 line(0x50, "0", 1.0),
                 line(0x51, "BLUE", 2.0),
                 insert(0x52, "0", "INNER"),
             ],
-        },
+        ),
     );
     block_records.insert(
         "INNER".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "INNER".to_string(),
-            entities: vec![line(0x60, "0", 3.0)],
-        },
+        common::block_record("INNER", vec![line(0x60, "0", 3.0)]),
     );
     CadDatabase {
         entities,

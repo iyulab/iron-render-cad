@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 
 use iron_render_cad::{to_png, to_svg, Space, ToPngOptions, ToSvgOptions};
 use uncad_model::model::{Entity, EntityCommon, EntityId, InsertEntity, LineEntity, Point3D, Ref};
-use uncad_model::tables::{BlockRecord, Tables};
+use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
@@ -46,31 +46,25 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
     let mut block_records = BTreeMap::new();
     block_records.insert(
         "DOOR".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "DOOR".to_string(),
-            entities: vec![Entity::Line(LineEntity {
+        common::block_record(
+            "DOOR",
+            vec![Entity::Line(LineEntity {
                 common: common(0x70),
                 start_point: xyz(0.0, 0.0),
                 end_point: xyz(1.0, 1.0),
             })],
-        },
+        ),
     );
     block_records.insert(
         "TWICE".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "TWICE".to_string(),
-            entities: vec![insert(0x71, Ref::Resolved("NOWHERE".to_string()))],
-        },
+        common::block_record(
+            "TWICE",
+            vec![insert(0x71, Ref::Resolved("NOWHERE".to_string()))],
+        ),
     );
     block_records.insert(
         "EMPTY".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "EMPTY".to_string(),
-            entities: Vec::new(),
-        },
+        common::block_record("EMPTY", Vec::new()),
     );
     CadDatabase {
         entities,

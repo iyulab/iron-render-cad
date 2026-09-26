@@ -182,10 +182,9 @@ fn a_circle_in_a_rotated_block_counts_all_of_itself() {
     let mut blocks = BTreeMap::new();
     blocks.insert(
         "C".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "C".to_string(),
-            entities: vec![Entity::Circle(CircleEntity {
+        common::block_record(
+            "C",
+            vec![Entity::Circle(CircleEntity {
                 common: common(0x50),
                 center: xyz(0.0, 0.0, 0.0),
                 radius: 1.0,
@@ -195,7 +194,7 @@ fn a_circle_in_a_rotated_block_counts_all_of_itself() {
                     z: 1.0,
                 },
             })],
-        },
+        ),
     );
     let insert = Entity::Insert(InsertEntity {
         common: common(0x10),
@@ -262,10 +261,9 @@ fn a_bulged_polyline_in_a_rotated_block_counts_all_of_its_arc() {
     let mut blocks = BTreeMap::new();
     blocks.insert(
         "P".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "P".to_string(),
-            entities: vec![Entity::LwPolyline(LwPolylineEntity {
+        common::block_record(
+            "P",
+            vec![Entity::LwPolyline(LwPolylineEntity {
                 common: common(0x50),
                 vertices: vec![
                     PolylineVertex {
@@ -280,7 +278,7 @@ fn a_bulged_polyline_in_a_rotated_block_counts_all_of_its_arc() {
                 elevation: 0.0,
                 extrusion: xyz(0.0, 0.0, 1.0),
             })],
-        },
+        ),
     );
     let insert = Entity::Insert(InsertEntity {
         common: common(0x10),

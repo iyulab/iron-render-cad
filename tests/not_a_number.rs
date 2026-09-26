@@ -16,7 +16,7 @@ use uncad_model::model::{
     CircleEntity, Entity, EntityCommon, EntityId, InsertEntity, LineEntity, Point3D, Ref,
     TextEntity,
 };
-use uncad_model::tables::{BlockRecord, Tables};
+use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
@@ -48,11 +48,7 @@ fn a_non_finite_coordinate_never_reaches_an_svg_attribute() {
     let mut block_records = BTreeMap::new();
     block_records.insert(
         "B".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "B".to_string(),
-            entities: vec![line(0x50, (0.0, 0.0), (10.0, 10.0))],
-        },
+        common::block_record("B", vec![line(0x50, (0.0, 0.0), (10.0, 10.0))]),
     );
     let db = CadDatabase {
         entities: vec![

@@ -15,7 +15,7 @@ use iron_render_cad::{to_svg, Space, ToSvgOptions};
 use uncad_model::model::{
     AttribEntity, CircleEntity, Entity, EntityCommon, InsertEntity, Point2D, Point3D, Ref,
 };
-use uncad_model::tables::{BlockRecord, Tables};
+use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
@@ -79,20 +79,12 @@ fn drawing(dxf_shape: bool) -> CadDatabase {
         title.push(Entity::Attrib(tag_value()));
     }
     let mut block_records = BTreeMap::new();
-    block_records.insert(
-        "TITLE".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "TITLE".to_string(),
-            entities: title,
-        },
-    );
+    block_records.insert("TITLE".to_string(), common::block_record("TITLE", title));
     block_records.insert(
         "TAG".to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: "TAG".to_string(),
-            entities: vec![Entity::Circle(CircleEntity {
+        common::block_record(
+            "TAG",
+            vec![Entity::Circle(CircleEntity {
                 common: common(0x70),
                 center: xyz(0.0, 0.0),
                 radius: 1.0,
@@ -102,7 +94,7 @@ fn drawing(dxf_shape: bool) -> CadDatabase {
                     z: 1.0,
                 },
             })],
-        },
+        ),
     );
     CadDatabase {
         entities: vec![insert(0x10, "TITLE", (100.0, 0.0), Vec::new())],

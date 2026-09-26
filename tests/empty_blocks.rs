@@ -36,14 +36,7 @@ fn insert(id: u64, block_name: &str) -> Entity {
 }
 
 fn block(name: &str, entities: Vec<Entity>) -> (String, BlockRecord) {
-    (
-        name.to_string(),
-        BlockRecord {
-            base_point: Default::default(),
-            name: name.to_string(),
-            entities,
-        },
-    )
+    (name.to_string(), common::block_record(name, entities))
 }
 
 #[test]

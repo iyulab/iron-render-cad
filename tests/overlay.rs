@@ -8,7 +8,7 @@
 //! What must never happen is tested first: the original layer is exactly
 //! the original render, and no change is dropped without a reason.
 
-use iron_diff_cad::{diff, Change, ChangeSet, DiffOptions, Unknown};
+use iron_diff_cad::{diff, Change, DiffOptions};
 use iron_render_cad::{
     overlay_to_svg, svg_to_png, to_svg, MarkKind, NotMarkedReason, OverlayOptions, ToSvgOptions,
     CONFLICT_DELTA_E,
@@ -108,6 +108,11 @@ fn body(document: &str) -> &str {
     rest.strip_suffix("\n</svg>").unwrap()
 }
 
+/// A change from its JSON form.
+fn change(v: Value) -> Change {
+    serde_json::from_value(v).expect("a change deserializes")
+}
+
 #[test]
 fn the_original_layer_is_the_original_render_byte_for_byte() {
     let before_json = g1_json();
@@ -169,11 +174,11 @@ fn every_kind_of_change_is_marked_or_reported() {
     let mut changes = diff(&before, &after, DiffOptions::default());
     // A change whose counterpart is not decided, and one about an entity
     // neither state has at the top level.
-    changes.changes.push(Change::Unknown(Unknown {
-        id: EntityId::new(291),
-        candidates: vec![EntityId::new(292)],
-        reason: "test".into(),
-    }));
+    // Built from its wire form: a change set is a result of the differ, and
+    // a consumer that holds one it did not compute has it as JSON.
+    changes.changes.push(change(serde_json::json!({
+        "type": "UNKNOWN", "data": { "id": 291, "candidates": [292], "reason": "test" }
+    })));
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
 
     assert_eq!(
@@ -223,15 +228,11 @@ fn every_kind_of_change_is_marked_or_reported() {
 #[test]
 fn a_change_the_render_draws_nothing_for_is_reported() {
     let before = model(&g1_json());
-    let changes = ChangeSet {
-        changes: vec![Change::Removed(iron_diff_cad::EntityRecord {
-            id: EntityId::new(9999),
-            entity_type: "LINE".into(),
-            provenance: uncad_model::model::Origin::Vector,
-            confidence: uncad_model::model::Confidence::High,
-        })],
-        ..diff(&before, &before, DiffOptions::default())
-    };
+    let mut changes = diff(&before, &before, DiffOptions::default());
+    changes.changes = vec![change(serde_json::json!({
+        "type": "REMOVED",
+        "data": { "id": 9999, "entity_type": "LINE", "provenance": "VECTOR", "confidence": "HIGH" }
+    }))];
     let overlay = overlay_to_svg(&before, &before, &changes, OverlayOptions::default());
     assert!(overlay.marked.is_empty());
     assert_eq!(overlay.not_marked.len(), 1);

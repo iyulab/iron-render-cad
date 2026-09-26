@@ -119,6 +119,21 @@ pub struct NotMarked {
     pub reason: NotMarkedReason,
 }
 
+/// A color of the original drawing close enough to the proposal color that
+/// a change drawn in one may not stand out against a line drawn in the
+/// other.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[non_exhaustive]
+pub struct ColorConflict {
+    /// The original's color, `#rrggbb`.
+    pub color: String,
+    /// How many times the original layer paints with it (stroke, fill and
+    /// gradient-stop attributes), a measure of how much of the drawing it is.
+    pub uses: usize,
+    /// Its CIELAB distance (CIE76 ΔE) from the proposal color.
+    pub delta_e: f64,
+}
+
 /// What [`overlay_to_svg`] drew.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -141,6 +156,11 @@ pub struct OverlayResult {
     /// caller adding its own marks (a revision symbol by a cloud) sizes
     /// them by.
     pub stroke_width: f64,
+    /// The colors the original layer paints with that are hard to tell from
+    /// the proposal color (within [`CONFLICT_DELTA_E`]), nearest first. Not
+    /// empty means some changes may not stand out from the original; a
+    /// caller can pick another [`OverlayOptions::proposal_color`].
+    pub proposal_color_conflicts: Vec<ColorConflict>,
 }
 
 /// Draws `changes` -- the change set from `before` to `after`, as
@@ -335,6 +355,10 @@ pub fn overlay_to_svg(
         "<style>#changes *{{stroke:{color};fill:none}}#changes text,#changes tspan{{fill:{color};stroke:none}}#changes .removed *,#changes .unknown{{stroke-dasharray:{dash}}}</style>"
     );
     let defs = b.defs_block(stroke_width);
+    let proposal_color_conflicts = color_conflicts(
+        options.proposal_color,
+        colors_used(&defs).into_iter().chain(colors_used(&original)),
+    );
     let svg = format!(
         "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{stroke_width}\">\n  {style}\n  {defs}<g id=\"original\">\n  {original}\n</g>\n  <g id=\"changes\">{layer}\n</g>\n</svg>"
     );
@@ -346,7 +370,93 @@ pub fn overlay_to_svg(
         view_box: window,
         origin: b.origin,
         stroke_width,
+        proposal_color_conflicts,
     }
+}
+
+/// How close, as a CIELAB distance (CIE76 ΔE), an original color may come
+/// to the proposal color before the two are reported as hard to tell apart.
+/// There is no standard threshold for "confused at a glance" (2.3 is the
+/// just-noticeable difference); 30 takes in pure red (#ff0000 is 23.9 from
+/// the default proposal color) and dark or light reds, and leaves orange
+/// (46.5), rose (42.0) and magenta (109.0) out.
+pub const CONFLICT_DELTA_E: f64 = 30.0;
+
+/// Every hex color an SVG fragment paints with -- `stroke`, `fill` and
+/// gradient `stop-color` attributes -- and how many times.
+fn colors_used(svg: &str) -> BTreeMap<[u8; 3], usize> {
+    let mut used = BTreeMap::new();
+    for attribute in ["stroke=\"#", "fill=\"#", "stop-color=\"#"] {
+        for (at, _) in svg.match_indices(attribute) {
+            let hex = &svg[at + attribute.len()..];
+            let Some(hex) = hex
+                .get(..6)
+                .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
+            else {
+                continue;
+            };
+            let channel = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).unwrap_or(0);
+            *used
+                .entry([channel(0), channel(2), channel(4)])
+                .or_insert(0) += 1;
+        }
+    }
+    used
+}
+
+/// The colors of `used` within [`CONFLICT_DELTA_E`] of `proposal`, nearest
+/// first (then by color, so the order does not depend on the drawing).
+fn color_conflicts(
+    proposal: [u8; 3],
+    used: impl IntoIterator<Item = ([u8; 3], usize)>,
+) -> Vec<ColorConflict> {
+    let mut merged: BTreeMap<[u8; 3], usize> = BTreeMap::new();
+    for (color, uses) in used {
+        *merged.entry(color).or_insert(0) += uses;
+    }
+    let target = lab(proposal);
+    let mut conflicts: Vec<ColorConflict> = merged
+        .into_iter()
+        .filter_map(|(color, uses)| {
+            let c = lab(color);
+            let delta_e = ((c[0] - target[0]).powi(2)
+                + (c[1] - target[1]).powi(2)
+                + (c[2] - target[2]).powi(2))
+            .sqrt();
+            (delta_e < CONFLICT_DELTA_E).then(|| ColorConflict {
+                color: format!("#{:02x}{:02x}{:02x}", color[0], color[1], color[2]),
+                uses,
+                delta_e,
+            })
+        })
+        .collect();
+    conflicts.sort_by(|a, b| a.delta_e.total_cmp(&b.delta_e).then(a.color.cmp(&b.color)));
+    conflicts
+}
+
+/// An sRGB color in CIELAB (D65 white point).
+fn lab(rgb: [u8; 3]) -> [f64; 3] {
+    let linear = |c: u8| {
+        let c = f64::from(c) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let (r, g, b) = (linear(rgb[0]), linear(rgb[1]), linear(rgb[2]));
+    let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+    let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+    let f = |t: f64| {
+        if t > 216.0 / 24389.0 {
+            t.cbrt()
+        } else {
+            (24389.0 / 27.0 * t + 16.0) / 116.0
+        }
+    };
+    let (fx, fy, fz) = (f(x), f(y), f(z));
+    [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
 }
 
 /// A dash and a gap of the dashed marks, in stroke widths.
@@ -500,5 +610,36 @@ mod tests {
         assert!(d.ends_with("0 -2Z"), "{d}");
         // 4 / 2 arcs on the long sides, 2 / 2 on the short ones.
         assert_eq!(d.matches('A').count(), 2 + 1 + 2 + 1, "{d}");
+    }
+
+    #[test]
+    fn colors_are_counted_by_attribute_and_named_colors_are_not_hex() {
+        let svg = concat!(
+            r##"<line stroke="#FF0000"/><text fill="#ff0000" stroke="none">x</text>"##,
+            r##"<stop stop-color="#00ff00"/><g stroke="black"><path fill="#12"/></g>"##,
+        );
+        let used = colors_used(svg);
+        assert_eq!(used.get(&[0xff, 0, 0]), Some(&2));
+        assert_eq!(used.get(&[0, 0xff, 0]), Some(&1));
+        assert_eq!(used.len(), 2, "{used:?}");
+    }
+
+    #[test]
+    fn conflicts_are_the_close_colors_nearest_first() {
+        let used = [
+            ([0xff, 0, 0], 4),
+            ([0xcc, 0, 0], 1),
+            ([0xff, 0x7f, 0], 9),
+            ([0, 0, 0], 3),
+        ];
+        let conflicts = color_conflicts(DEFAULT_PROPOSAL_COLOR, used);
+        let colors: Vec<&str> = conflicts.iter().map(|c| c.color.as_str()).collect();
+        // #cc0000 is 14.7 away, #ff0000 23.9; orange (46.5) and black stay out.
+        assert_eq!(colors, ["#cc0000", "#ff0000"]);
+        assert_eq!(conflicts[1].uses, 4);
+        assert_eq!(
+            color_conflicts(DEFAULT_PROPOSAL_COLOR, [(DEFAULT_PROPOSAL_COLOR, 1)])[0].delta_e,
+            0.0
+        );
     }
 }

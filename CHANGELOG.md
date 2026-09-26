@@ -38,6 +38,10 @@ bumps the minor version.
 
 ### Added
 
+- `OverlayResult::proposal_color_conflicts`: the colors the original layer paints with that are
+  within `CONFLICT_DELTA_E` (CIELAB ΔE 30) of the proposal color, with how often each is used and
+  how close it is, nearest first. A drawing already drawn in red hides changes drawn in red; the
+  report says so, and `OverlayOptions::proposal_color` picks another color.
 - `ToSvgResult::undefined_arcs` (and the same field on `ToPngResult`): the ARCs that are not
   drawn because their start and end angles are equal. The format does not say whether such an
   arc is the whole circle or nothing.

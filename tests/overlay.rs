@@ -11,6 +11,7 @@
 use iron_diff_cad::{diff, Change, ChangeSet, DiffOptions, Unknown};
 use iron_render_cad::{
     overlay_to_svg, svg_to_png, to_svg, MarkKind, NotMarkedReason, OverlayOptions, ToSvgOptions,
+    CONFLICT_DELTA_E,
 };
 use serde_json::Value;
 use uncad_model::model::EntityId;
@@ -413,4 +414,45 @@ fn framing_no_changes_shows_the_whole_drawing() {
     let alone = to_svg(&before, ToSvgOptions::default());
     assert_eq!(framed.view_box, alone.view_box);
     assert!(framed.svg.contains(body(&alone.svg)));
+}
+
+/// G1's holes are drawn in pure red, the default proposal color is a red
+/// too: the report names the clash -- the color, how much of the original
+/// uses it, how close it is -- so a caller can pick another color. With a
+/// blue proposal color nothing in G1 is close and the report is empty.
+#[test]
+fn an_original_color_close_to_the_proposal_color_is_reported() {
+    let before_json = g1_json();
+    let mut after_json = before_json.clone();
+    edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, DiffOptions::default());
+
+    let red = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+    let [conflict] = red.proposal_color_conflicts.as_slice() else {
+        panic!("one clash expected: {:?}", red.proposal_color_conflicts)
+    };
+    assert_eq!(conflict.color, "#ff0000");
+    assert_eq!(conflict.uses, 4, "the four holes");
+    assert!(conflict.delta_e < CONFLICT_DELTA_E);
+    assert!(
+        (conflict.delta_e - 23.9).abs() < 0.1,
+        "{}",
+        conflict.delta_e
+    );
+
+    let blue = overlay_to_svg(
+        &before,
+        &after,
+        &changes,
+        OverlayOptions {
+            proposal_color: [0x00, 0x66, 0xcc],
+            ..OverlayOptions::default()
+        },
+    );
+    assert!(
+        blue.proposal_color_conflicts.is_empty(),
+        "{:?}",
+        blue.proposal_color_conflicts
+    );
 }

@@ -36,8 +36,8 @@ pub use png::{
     ToPngResult, View, DEFAULT_MAX_EDGE,
 };
 pub use svg::{
-    layout_to_svg, overlay_to_svg, to_svg, Crop, CropReport, Hidden, LayoutError, LeftOut,
-    LeftOutReason, Mark, MarkKind, NotMarked, NotMarkedReason, OverlayFrame, OverlayOptions,
-    OverlayResult, Part, Rect, Scene, SheetSource, Space, TextBox, ToSvgOptions, ToSvgResult,
-    ViewportReport, DEFAULT_CAP_HEIGHT, DEFAULT_PROPOSAL_COLOR,
+    layout_to_svg, overlay_to_svg, to_svg, ColorConflict, Crop, CropReport, Hidden, LayoutError,
+    LeftOut, LeftOutReason, Mark, MarkKind, NotMarked, NotMarkedReason, OverlayFrame,
+    OverlayOptions, OverlayResult, Part, Rect, Scene, SheetSource, Space, TextBox, ToSvgOptions,
+    ToSvgResult, ViewportReport, CONFLICT_DELTA_E, DEFAULT_CAP_HEIGHT, DEFAULT_PROPOSAL_COLOR,
 };

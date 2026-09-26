@@ -6,12 +6,12 @@
 //! The expected numbers are offset x scale and nothing else, from the DXF
 //! definition of group 40.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions, ToSvgResult};
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, MLineEntity, MLineVertex, Origin, Point3D, Ref,
-};
+use uncad_model::model::{Entity, MLineEntity, MLineVertex, Point3D, Ref};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
@@ -27,20 +27,7 @@ fn wall(scale: Option<f64>) -> ToSvgResult {
         },
     };
     let mline = Entity::MLine(MLineEntity {
-        common: EntityCommon {
-            id: EntityId::new(0x10),
-            origin: Origin::Vector,
-            confidence: Confidence::High,
-            source_handle: Ref::Resolved("10".to_string()),
-            layer: Ref::Resolved("0".to_string()),
-            color_index: 7,
-            true_color: None,
-            invisible: false,
-            linetype: uncad_model::model::EntityLinetype::ByLayer,
-            linetype_scale: 1.0,
-            lineweight: Some(-1),
-            transparency: Some(0),
-        },
+        common: common::common_on(0x10, "0", 7),
         vertices: vec![vertex(0.0), vertex(200.0)],
         closed: false,
         mlinestyle_name: Ref::Resolved("STANDARD".to_string()),

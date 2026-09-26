@@ -3,29 +3,17 @@
 //! The model keeps the string the file wrote; the renderer decodes it. The
 //! expected strings are what AutoCAD displays for each code.
 
+mod common;
+
 use iron_render_cad::{to_svg, Space, ToSvgOptions, DEFAULT_CAP_HEIGHT};
 use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, MTextAttachment, MTextEntity, Origin, Point2D,
-    Point3D, Ref, TextEntity,
+    Entity, EntityCommon, MTextAttachment, MTextEntity, Point2D, Point3D, TextEntity,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 7)
 }
 
 fn text(raw: &str, height: f64) -> Entity {

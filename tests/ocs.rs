@@ -9,12 +9,12 @@
 //! Every expected number is worked out from the DXF reference's arbitrary
 //! axis algorithm, not read off this crate's output.
 
+mod common;
+
 use std::f64::consts::FRAC_1_SQRT_2;
 
 use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions, ToSvgResult};
-use uncad_model::model::{
-    CircleEntity, Confidence, Entity, EntityCommon, EntityId, Origin, Point3D, Ref,
-};
+use uncad_model::model::{CircleEntity, Entity, Point3D};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
@@ -119,20 +119,7 @@ fn g11_draws_each_mirrored_entity_on_the_other_side_of_the_y_axis() {
 
 fn circle(normal: Point3D, z: f64) -> Entity {
     Entity::Circle(CircleEntity {
-        common: EntityCommon {
-            id: EntityId::new(0x10),
-            origin: Origin::Vector,
-            confidence: Confidence::High,
-            source_handle: Ref::Resolved("10".to_string()),
-            layer: Ref::Resolved("0".to_string()),
-            color_index: 7,
-            true_color: None,
-            invisible: false,
-            linetype: uncad_model::model::EntityLinetype::ByLayer,
-            linetype_scale: 1.0,
-            lineweight: Some(-1),
-            transparency: Some(0),
-        },
+        common: common::common_on(0x10, "0", 7),
         center: Point3D { x: 0.0, y: 0.0, z },
         radius: 10.0,
         extrusion: normal,

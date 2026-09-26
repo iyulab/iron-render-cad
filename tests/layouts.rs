@@ -13,13 +13,15 @@
 //! (paper = C + s (R(twist) (model - T) - V)), not read off this crate's
 //! output.
 
+mod common;
+
 use iron_render_cad::{
     layout_to_png, layout_to_svg, LayoutError, PngError, PngSize, ToPngOptions, ToSvgOptions,
     ToSvgResult,
 };
 use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity, HatchPatternLine,
-    Origin, Point2D, Point3D, PolylineVertex, RayEntity, Ref,
+    Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity, HatchPatternLine, Point2D,
+    Point3D, PolylineVertex, RayEntity, Ref,
 };
 use uncad_model::CadDatabase;
 
@@ -171,20 +173,7 @@ fn a_view_that_cannot_be_drawn_is_reported_and_its_frame_stays() {
 }
 
 fn common(id: u64, layer: &str) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved(layer.to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, layer, 7)
 }
 
 /// Adds `e` to G14's model space.

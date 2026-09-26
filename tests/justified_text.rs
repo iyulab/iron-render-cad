@@ -10,32 +10,21 @@
 //! default `cap_height`), descenders 0.2 of it, 0.6 of it per character --
 //! not read off this crate's output.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
 
 use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions};
 use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, HorizontalJustification, Origin, Point2D, Point3D,
-    Ref, TextEntity, VerticalJustification,
+    Entity, EntityCommon, HorizontalJustification, Point2D, Point3D, Ref, TextEntity,
+    VerticalJustification,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 7)
 }
 
 struct Text {

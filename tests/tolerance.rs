@@ -2,31 +2,18 @@
 //! style's text height, and at 1 only when the style states none either.
 //! (An R2000+ feature control frame stores no height of its own.)
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::{to_svg, Space, ToSvgOptions, DEFAULT_CAP_HEIGHT};
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, Origin, Point3D, Ref, ToleranceEntity,
-};
+use uncad_model::model::{Entity, Point3D, Ref, ToleranceEntity};
 use uncad_model::tables::{DimStyleRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn tolerance(text_height: Option<f64>, style: Ref<String>) -> Entity {
     Entity::Tolerance(ToleranceEntity {
-        common: EntityCommon {
-            id: EntityId::new(0x10),
-            origin: Origin::Vector,
-            confidence: Confidence::High,
-            source_handle: Ref::Resolved("10".to_string()),
-            layer: Ref::Resolved("0".to_string()),
-            color_index: 7,
-            true_color: None,
-            invisible: false,
-            linetype: uncad_model::model::EntityLinetype::ByLayer,
-            linetype_scale: 1.0,
-            lineweight: Some(-1),
-            transparency: Some(0),
-        },
+        common: common::common_on(0x10, "0", 7),
         insertion_point: Point3D {
             x: 0.0,
             y: 0.0,

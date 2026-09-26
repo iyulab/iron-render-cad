@@ -2,30 +2,17 @@
 //! not. The test pairs the two so a check that only looked for the signal
 //! could not tell "reported when it should be" from "reported always".
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::{to_svg, Space, ToSvgOptions};
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, InsertEntity, LineEntity, Origin, Point3D, Ref,
-};
+use uncad_model::model::{Entity, EntityCommon, InsertEntity, LineEntity, Point3D, Ref};
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 256,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 256)
 }
 
 fn p3(x: f64, y: f64, z: f64) -> Point3D {

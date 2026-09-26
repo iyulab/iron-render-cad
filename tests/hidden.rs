@@ -5,12 +5,12 @@
 //! Asked to, the renderer draws them at half opacity instead. Either way
 //! they never stretch the picture.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::{to_png, to_svg, Crop, Space, ToPngOptions, ToSvgOptions, ToSvgResult};
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, InsertEntity, LineEntity, Origin, Point3D, Ref,
-};
+use uncad_model::model::{Entity, EntityCommon, InsertEntity, LineEntity, Point3D, Ref};
 use uncad_model::tables::{BlockRecord, LayerRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
@@ -89,20 +89,7 @@ fn g13s_invisible_attribute_is_hidden_and_its_visible_one_is_not() {
 }
 
 fn common(id: u64, layer: &str) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved(layer.to_string()),
-        color_index: 256,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, layer, 256)
 }
 
 fn line(id: u64, layer: &str, from: (f64, f64), to: (f64, f64)) -> Entity {

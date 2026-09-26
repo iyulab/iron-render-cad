@@ -5,32 +5,19 @@
 //! showing one entity at a time walks the drawing once instead of once per
 //! picture.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::{
     layout_to_svg, to_svg, Crop, Hidden, LeftOutReason, Part, Rect, Scene, Space, ToSvgOptions,
 };
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, LineEntity, Origin, Point3D, RayEntity, Ref,
-};
+use uncad_model::model::{Entity, EntityCommon, LineEntity, Point3D, RayEntity, Ref};
 use uncad_model::tables::{LayerRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64, layer: &str) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved(layer.to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, layer, 7)
 }
 
 fn xyz(x: f64, y: f64) -> Point3D {

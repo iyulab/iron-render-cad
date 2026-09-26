@@ -10,12 +10,12 @@
 //! the em, lines 5/3 of the height apart), not read off this crate's
 //! output.
 
+mod common;
+
 use std::f64::consts::FRAC_PI_2;
 
 use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions};
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, MTextAttachment, MTextEntity, Origin, Point3D, Ref,
-};
+use uncad_model::model::{Entity, MTextAttachment, MTextEntity, Point3D, Ref};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
@@ -43,20 +43,7 @@ impl Default for MText {
 /// `[min_x, min_y, max_x, max_y]`.
 fn extent(m: MText) -> [f64; 4] {
     let entity = Entity::MText(MTextEntity {
-        common: EntityCommon {
-            id: EntityId::new(0x11),
-            origin: Origin::Vector,
-            confidence: Confidence::High,
-            source_handle: Ref::Resolved("11".to_string()),
-            layer: Ref::Resolved("0".to_string()),
-            color_index: 7,
-            true_color: None,
-            invisible: false,
-            linetype: uncad_model::model::EntityLinetype::ByLayer,
-            linetype_scale: 1.0,
-            lineweight: Some(-1),
-            transparency: Some(0),
-        },
+        common: common::common_on(0x11, "0", 7),
         insertion_point: Point3D {
             x: 10.0,
             y: 20.0,

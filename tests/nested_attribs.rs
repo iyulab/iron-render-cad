@@ -7,31 +7,19 @@
 //! them among the enclosing block's entities. Both shapes occur; either way
 //! the value is drawn exactly once.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::{to_svg, Space, ToSvgOptions};
 use uncad_model::model::{
-    AttribEntity, CircleEntity, Confidence, Entity, EntityCommon, EntityId, InsertEntity, Origin,
-    Point2D, Point3D, Ref,
+    AttribEntity, CircleEntity, Entity, EntityCommon, InsertEntity, Point2D, Point3D, Ref,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 7)
 }
 
 fn xyz(x: f64, y: f64) -> Point3D {

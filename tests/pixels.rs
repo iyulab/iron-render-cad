@@ -5,34 +5,21 @@
 //! every [`ToPngResult`] says which grid it drew. No pixel is compared:
 //! the sizes are read from the PNG header.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::{
     to_png, to_svg, Background, Fonts, PngError, PngSize, Rect, Scene, Space, ToPngOptions,
     ToSvgOptions, View, DEFAULT_MAX_EDGE,
 };
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, LineEntity, Origin, Point2D, Point3D, Ref,
-};
+use uncad_model::model::{Entity, LineEntity, Point2D, Point3D};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn line(id: u64, from: (f64, f64), to: (f64, f64)) -> Entity {
     Entity::Line(LineEntity {
-        common: EntityCommon {
-            id: EntityId::new(id),
-            origin: Origin::Vector,
-            confidence: Confidence::High,
-            source_handle: Ref::Resolved(format!("{id:X}")),
-            layer: Ref::Resolved("0".to_string()),
-            color_index: 7,
-            true_color: None,
-            invisible: false,
-            linetype: uncad_model::model::EntityLinetype::ByLayer,
-            linetype_scale: 1.0,
-            lineweight: Some(-1),
-            transparency: Some(0),
-        },
+        common: common::common_on(id, "0", 7),
         start_point: Point3D {
             x: from.0,
             y: from.1,

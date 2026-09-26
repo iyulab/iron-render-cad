@@ -2,10 +2,10 @@
 //! XY is drawn where the file puts it; only a body with depth gets the
 //! isometric view.
 
+mod common;
+
 use iron_render_cad::{to_svg, Space, ToSvgOptions};
-use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, Origin, Point3D, Ref, Solid3DEntity,
-};
+use uncad_model::model::{Entity, Point3D, Solid3DEntity};
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
@@ -16,20 +16,7 @@ fn p3(x: f64, y: f64, z: f64) -> Point3D {
 fn region(edges: Vec<[Point3D; 2]>) -> CadDatabase {
     CadDatabase {
         entities: vec![Entity::Region(Solid3DEntity {
-            common: EntityCommon {
-                id: EntityId::new(0x10),
-                origin: Origin::Vector,
-                confidence: Confidence::High,
-                source_handle: Ref::Resolved("10".to_string()),
-                layer: Ref::Resolved("0".to_string()),
-                color_index: 7,
-                true_color: None,
-                invisible: false,
-                linetype: uncad_model::model::EntityLinetype::ByLayer,
-                linetype_scale: 1.0,
-                lineweight: Some(-1),
-                transparency: Some(0),
-            },
+            common: common::common_on(0x10, "0", 7),
             wireframe_edges: edges,
             skipped_edges: 0,
         })],

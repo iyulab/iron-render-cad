@@ -7,14 +7,15 @@
 //! result says what was left out. The numbers are the caps documented in
 //! `iron_render_cad::limits`.
 
+mod common;
+
 use std::collections::BTreeMap;
 
 use iron_render_cad::limits::Cap;
 use iron_render_cad::{to_png, to_svg, Crop, Space, ToPngOptions, ToSvgOptions};
 use uncad_model::model::{
-    CircleEntity, Confidence, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity,
-    HatchPatternLine, InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D,
-    PolylineVertex, Ref,
+    CircleEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath, HatchEntity, HatchPatternLine,
+    InsertEntity, LineEntity, LwPolylineEntity, Point2D, Point3D, PolylineVertex, Ref,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
@@ -29,20 +30,7 @@ const ENTITY_BYTES: usize = DOCUMENT_BYTES / 4;
 const SLACK: usize = DOCUMENT_BYTES / 2;
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 256,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 256)
 }
 
 fn xyz(x: f64, y: f64) -> Point3D {

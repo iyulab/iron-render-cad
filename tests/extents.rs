@@ -7,34 +7,22 @@
 //! crate's output. The viewBox is the extent (padding 0, no outlier trim),
 //! written as `x, -max_y, width, height`.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 
 use iron_render_cad::limits::Cap;
 use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions};
 use uncad_model::model::{
-    ArcEntity, CircleEntity, Confidence, EllipseEntity, Entity, EntityCommon, EntityId,
-    InsertEntity, LineEntity, LwPolylineEntity, Origin, Point2D, Point3D, PointEntity,
-    PolylineVertex, Ref,
+    ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, InsertEntity,
+    LineEntity, LwPolylineEntity, Point2D, Point3D, PointEntity, PolylineVertex, Ref,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 7)
 }
 
 fn xyz(x: f64, y: f64, z: f64) -> Point3D {

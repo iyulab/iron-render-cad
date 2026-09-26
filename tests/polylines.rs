@@ -7,29 +7,17 @@
 //! output. The viewBox is the extent (padding 0, no outlier trim), written
 //! as `x, -max_y, width, height`.
 
+mod common;
+
 use iron_render_cad::{to_svg, Crop, Space, ToSvgOptions, ToSvgResult};
 use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, LwPolylineEntity, Origin, Point2D, Point3D,
-    PolylineVertex, Ref,
+    Entity, EntityCommon, LwPolylineEntity, Point2D, Point3D, PolylineVertex,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 7)
 }
 
 /// A polyline whose vertex `i` has `bulges[i]`, or 0 past the list's end.

@@ -6,32 +6,21 @@
 //! the fonts', not the estimate's: a hit test, a label-collision check or
 //! a caller placing its own marks next to a text needs it.
 
+mod common;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use iron_render_cad::{to_svg, Fonts, Rect, Scene, Space, TextBox, ToSvgOptions};
 use uncad_model::model::{
-    Confidence, Entity, EntityCommon, EntityId, HorizontalJustification, InsertEntity, MTextEntity,
-    Origin, Point2D, Point3D, Ref, TextEntity, VerticalJustification,
+    Entity, EntityCommon, HorizontalJustification, InsertEntity, MTextEntity, Point2D, Point3D,
+    Ref, TextEntity, VerticalJustification,
 };
 use uncad_model::tables::{BlockRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
 fn common(id: u64) -> EntityCommon {
-    EntityCommon {
-        id: EntityId::new(id),
-        origin: Origin::Vector,
-        confidence: Confidence::High,
-        source_handle: Ref::Resolved(format!("{id:X}")),
-        layer: Ref::Resolved("0".to_string()),
-        color_index: 7,
-        true_color: None,
-        invisible: false,
-        linetype: uncad_model::model::EntityLinetype::ByLayer,
-        linetype_scale: 1.0,
-        lineweight: Some(-1),
-        transparency: Some(0),
-    }
+    common::common_on(id, "0", 7)
 }
 
 fn z() -> Point3D {

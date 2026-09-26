@@ -70,6 +70,9 @@ bumps the minor version.
 
 ### Fixed
 
+- A feature control frame (TOLERANCE) is drawn with its MTEXT codes read: the symbol-font
+  switch `{\Fgdt;j}` is no longer drawn as text. `%%v`, which has no reading here, stays as
+  written.
 - An ARC whose angles are a whole turn apart (0 and 360 degrees) is drawn as the whole circle.
   Before, the SVG arc command, whose two ends were the same point, drew nothing. An ARC whose
   angles are more than a turn apart counts only the arc it draws in the extent, not the whole

@@ -2025,13 +2025,18 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             );
             // Its box is not counted towards the extent (the insertion
             // point is), but it is estimated like any text's.
-            let estimate = justify::estimate_text_box(&layout, &t.text_value, ctx);
-            let id = ctx.record_text(t.common.id, &t.text_value, estimate);
+            // A frame's text is written in MTEXT codes: `{\Fgdt;j}` picks
+            // the symbol font for the letter after it (fonts are not drawn,
+            // so the letter is). What `%%v` stands for in a frame is not a
+            // code this renderer knows, so it stays as written.
+            let text = text_codes::decode(&t.text_value, true);
+            let estimate = justify::estimate_text_box(&layout, &text, ctx);
+            let id = ctx.record_text(t.common.id, &text, estimate);
             Some(justify::text_element(
                 &id,
                 &layout,
                 &color,
-                &t.text_value,
+                &text,
                 frame,
                 ctx.cap_height,
             ))

@@ -87,3 +87,25 @@ fn a_frame_without_a_height_takes_its_styles() {
         1.0,
     );
 }
+
+/// A frame's text is written in MTEXT codes: the font switch and its braces
+/// are not drawn -- the symbol letter is, fonts not being reproduced -- and
+/// `%%v`, which this renderer has no reading of, stays as written.
+#[test]
+fn a_frames_mtext_codes_are_not_drawn_as_text() {
+    let db = CadDatabase {
+        entities: vec![tolerance(Some(2.5), Ref::Absent)],
+        tables: Tables::default(),
+        read_diagnostics: ReadDiagnostics::default(),
+    };
+    let svg = to_svg(
+        &db,
+        ToSvgOptions {
+            space: Space::All,
+            ..ToSvgOptions::default()
+        },
+    )
+    .svg;
+    assert!(!svg.contains("Fgdt"), "{svg}");
+    assert!(svg.contains(">j%%v0.1<"), "{svg}");
+}

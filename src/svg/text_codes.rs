@@ -8,7 +8,8 @@
 //! reader undid it before the text reached the model. Two families are
 //! drawn:
 //!
-//! - **Percent codes**, in TEXT, ATTRIB and MTEXT: `%%d` (degree), `%%p`
+//! - **Percent codes**, in TEXT, ATTRIB, MTEXT and a feature control
+//!   frame (TOLERANCE): `%%d` (degree), `%%p`
 //!   (plus-minus), `%%c` (diameter), `%%%` (a percent sign), `%%nnn` (the
 //!   character with that three-digit code); `%%u` / `%%o` switch underline /
 //!   overline, which is not drawn, so they are dropped. Codes 127, 128 and
@@ -17,7 +18,7 @@
 //!   they are read as those signs; a code naming any other control
 //!   character, which drawn text cannot carry, is left as written, as is
 //!   any other `%%x`. Outside MTEXT a backslash starts no code.
-//! - **MTEXT formatting codes**: `\P` (paragraph), `\N` (column) and `\X` (a
+//! - **MTEXT formatting codes**, in MTEXT and a feature control frame: `\P` (paragraph), `\N` (column) and `\X` (a
 //!   dimension's text, split above and below its line) break the line; `\~`
 //!   is a non-breaking space; `\\`, `\{` and `\}` are the characters; `\S…;`
 //!   is stacked text, drawn inline as `top/bottom` -- one side alone when the

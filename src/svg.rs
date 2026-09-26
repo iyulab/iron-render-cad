@@ -3678,6 +3678,7 @@ mod tests {
             annotation: LeaderAnnotation::Nothing,
             annotation_id: Ref::Absent,
             style_name: Ref::Absent,
+            style_overrides: None,
         })
     }
 

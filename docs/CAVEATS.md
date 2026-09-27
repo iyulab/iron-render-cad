@@ -199,17 +199,19 @@ stroke width, and each viewport gets its own copy of the patterns it fills with.
 ## What the picture shows
 
 The viewBox frames a rectangle chosen from the extents the top-level entities measured
-(`ToSvgOptions::crop`), padded. The default, `Crop::Cluster`, frames the dominant cluster of
-entities whose corners touch. It scores a cluster by its count times its size, so a single
-giant -- a block reference a corrupt file scales thousands of times -- can outscore the
-drawing itself; when no cluster then holds a majority, nothing is trimmed and the picture is
-the giant's. `Crop::Guarded` sets such outliers aside by rule instead: at most max(3, 1 %) of
-the entities, each over 20 times the size of the rest or over 20 of the rest's diagonals
-away from it, and never more than a fifth of the drawing. The thresholds are rules of thumb.
-What it sets aside is not drawn at all, since a giant would cross the picture whatever the
-viewBox. It can take an extent the caller states instead (a file header's), under the tests
-in `Crop::Guarded`'s documentation. A construction line (RAY, XLINE) measures only its base
-point and is never set aside.
+(`ToSvgOptions::crop`), padded. The default, `Crop::Guarded`, sets outliers aside by rule:
+at most max(3, 1 %) of the entities, each over 20 times the size of the rest or over 20 of
+the rest's diagonals away from it, and never more than a fifth of the drawing. The
+thresholds are rules of thumb. What it sets aside is not drawn at all, since a giant would
+cross the picture whatever the viewBox. It can take an extent the caller states instead (a
+file header's), under the tests in `Crop::Guarded`'s documentation. A construction line
+(RAY, XLINE) measures only its base point and is never set aside.
+
+`Crop::Cluster` frames the dominant cluster of entities whose corners touch instead. It
+scores a cluster by its count times its size, so a single giant -- a block reference a
+corrupt file scales thousands of times -- can outscore the drawing itself; when no cluster
+then holds a majority, nothing is trimmed, the picture is the giant's, and nothing is
+reported left out.
 
 Every result lists the entities its picture does not show (`crop.left_out`), with the
 reason. One outside the viewBox, under any crop, is still in the SVG document, where a

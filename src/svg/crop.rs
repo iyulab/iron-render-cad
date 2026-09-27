@@ -23,19 +23,22 @@
 
 use super::bounds::{bbox_of, diag, dominant_cluster_box, intersects, rect_gap, Box2D};
 use super::scene::Rect;
+use serde::Serialize;
 use uncad_model::model::EntityId;
 
 /// How a render chooses the world rectangle its picture shows, from the
 /// extents its top-level entities measured (a hidden entity measures
 /// nothing). The chosen rectangle is then padded by
 /// [`ToSvgOptions::padding`](crate::ToSvgOptions::padding).
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum Crop {
     /// The dominant spatially connected cluster of entities: groups whose
     /// corners touch, the largest by count and size absorbing its near
-    /// neighbours. The default -- 0.1's `outlier_trim: true`.
-    #[default]
+    /// neighbours -- 0.1's `outlier_trim: true`. A single giant that
+    /// touches the drawing (a block reference scaled thousands of times)
+    /// can outscore it, and the picture is then the giant's; nothing is
+    /// reported left out.
     Cluster,
     /// Every entity that measured an extent -- 0.1's `outlier_trim: false`.
     Everything,
@@ -45,14 +48,24 @@ pub enum Crop {
     /// it whatever the viewBox -- and reported. `stated` is an extent the
     /// caller holds from elsewhere, taken instead when it passes the test
     /// in the module docs.
+    /// The default, with nothing stated.
     Guarded { stated: Option<Rect> },
     /// Exactly this world rectangle. One that is not a finite rectangle
     /// (`min <= max` on both axes) frames nothing, like an empty drawing.
     Window(Rect),
 }
 
+impl Default for Crop {
+    /// [`Crop::Guarded`] with nothing stated: the only crop that leaves out
+    /// nothing unnamed.
+    fn default() -> Self {
+        Crop::Guarded { stated: None }
+    }
+}
+
 /// Why an entity is not in the picture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum LeftOutReason {
     /// [`Crop::Guarded`] set it aside: its diagonal is over 20 times the
@@ -67,7 +80,7 @@ pub enum LeftOutReason {
 }
 
 /// A top-level entity the picture does not show.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct LeftOut {
     pub id: EntityId,

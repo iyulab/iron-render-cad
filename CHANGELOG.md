@@ -13,7 +13,10 @@ bumps the minor version.
   planes, layouts and images (and an `iron-diff-cad` built on it). Upgrade both together; a
   `CadDatabase` from `uncad-model` 0.1 is no longer accepted.
 - **Breaking:** `ToSvgOptions::outlier_trim` is replaced by `crop: Crop`: `Crop::Cluster` is
-  `outlier_trim: true` (the default), `Crop::Everything` is `false`. `ToSvgOptions` also gains
+  `outlier_trim: true`, `Crop::Everything` is `false`. The default is now `Crop::Guarded` with
+  nothing stated: a block reference scaled thousands of times that touches the drawing no longer
+  becomes the picture, and what the guard sets aside is named in `ToSvgResult::crop` and not
+  drawn. Pass `Crop::Cluster` for the 0.1.0 frame. `ToSvgOptions` also gains
   `cap_height` and `include_hidden`; struct literals must set them or use `..Default::default()`.
 - **Breaking:** `ToPngOptions::scale` is replaced by `size: PngSize`; `PngSize::Scale(s)` is the
   old `scale: s`. `ToPngOptions` gains `stroke_px`, `max_edge`, `fonts` and `background`, and is
@@ -57,7 +60,8 @@ bumps the minor version.
 - `View`, the pixel grid a PNG covers, with `world_to_px` and `px_to_world`; `ToPngResult::view`
   says which world point each pixel of a PNG shows.
 - `Crop::Guarded`, which sets aside outliers far larger or farther than the rest of the drawing,
-  and `Crop::Window`, an exact world rectangle; `ToSvgResult::crop` names what the frame leaves out.
+  and `Crop::Window`, an exact world rectangle; `ToSvgResult::crop` names what the frame leaves out,
+  and `OverlayResult::left_out` what an overlay's original layer does not draw.
 - The `limits` module: every number from the file that becomes an allocation or a loop bound is
   capped, and what a cap left out is reported in `ToSvgResult::limits` (`LimitReport`).
 - `ToSvgResult::unresolved_block_refs`: the block references whose block the model does not hold.

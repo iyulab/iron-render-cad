@@ -8,6 +8,7 @@
 //! whose counterpart is uncertain gets a cloud and no geometry, and a change
 //! the picture cannot show is reported by name rather than dropped.
 
+use super::crop::{LeftOut, LeftOutReason};
 use super::format::clean;
 use super::scene::{doc_view_box, Rect, Scene};
 use super::ToSvgOptions;
@@ -161,6 +162,12 @@ pub struct OverlayResult {
     /// empty means some changes may not stand out from the original; a
     /// caller can pick another [`OverlayOptions::proposal_color`].
     pub proposal_color_conflicts: Vec<ColorConflict>,
+    /// The top-level entities of the first state the original layer does
+    /// not draw -- the outliers its crop set aside (see
+    /// [`ToSvgOptions::crop`]), in drawing order. Not empty means the
+    /// picture is not the whole drawing; a change to one of them is still
+    /// marked.
+    pub left_out: Vec<LeftOut>,
 }
 
 /// Draws `changes` -- the change set from `before` to `after`, as
@@ -355,6 +362,18 @@ pub fn overlay_to_svg(
         "<style>#changes *{{stroke:{color};fill:none}}#changes text,#changes tspan{{fill:{color};stroke:none}}#changes .removed *,#changes .unknown{{stroke-dasharray:{dash}}}</style>"
     );
     let defs = b.defs_block(stroke_width);
+    let left_out = b
+        .crop
+        .left_out
+        .iter()
+        .filter(|l| {
+            matches!(
+                l.reason,
+                LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier
+            )
+        })
+        .cloned()
+        .collect();
     let proposal_color_conflicts = color_conflicts(
         options.proposal_color,
         colors_used(&defs).into_iter().chain(colors_used(&original)),
@@ -371,6 +390,7 @@ pub fn overlay_to_svg(
         origin: b.origin,
         stroke_width,
         proposal_color_conflicts,
+        left_out,
     }
 }
 

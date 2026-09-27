@@ -37,9 +37,9 @@ std::fs::write("drawing.png", png.png)?;
 Render once, draw many pictures of it -- here one tile, and where each text landed:
 
 ```rust
-use iron_render_cad::{Background, Crop, Fonts, Rect, Scene, ToSvgOptions, View};
+use iron_render_cad::{Background, Fonts, Rect, Scene, ToSvgOptions, View};
 
-let scene = Scene::new(&db, ToSvgOptions { crop: Crop::Guarded { stated: None }, ..ToSvgOptions::default() });
+let scene = Scene::new(&db, ToSvgOptions::default());
 let tile = Rect::new(0.0, 0.0, 100.0, 100.0);
 let view = View::of(tile, 10.0).expect("a positive scale"); // 1000 x 1000 px
 let png = scene.png(&view, 1.25, &Fonts::System, Background::White, |part| {

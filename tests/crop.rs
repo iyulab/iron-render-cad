@@ -1,7 +1,7 @@
 //! What the picture shows, and what it says it left out. The crop chooses
 //! the world rectangle a render frames from the extents its entities
-//! measured -- the dominant cluster (the default), everything, everything
-//! but a few outliers (the guard, which may take an extent the caller
+//! measured -- the dominant cluster, everything, everything but a few
+//! outliers (the guard, the default, which may take an extent the caller
 //! states instead), or a window -- and every result lists the entities the
 //! picture does not show, with the reason. An entity is never dropped
 //! without being named.
@@ -216,10 +216,11 @@ fn a_window_frames_exactly_itself() {
 }
 
 #[test]
-fn the_default_trim_names_what_it_leaves_outside_the_view() {
+fn the_cluster_trim_names_what_it_leaves_outside_the_view() {
     // The square and a stray dot far away: the dominant cluster is the
     // square, and the dot -- still in the document, as it always was --
-    // is outside the picture, and now said to be.
+    // is outside the picture, and said to be. (The guard, the default,
+    // sets the dot aside as a far outlier instead.)
     let mut entities = square();
     entities.push(dot(0x9, 1e6, 1e6));
     let result = to_svg(
@@ -227,7 +228,7 @@ fn the_default_trim_names_what_it_leaves_outside_the_view() {
         ToSvgOptions {
             space: Space::All,
             padding: 0.0,
-            ..ToSvgOptions::default()
+            ..options(Crop::Cluster)
         },
     );
     assert_eq!(result.view_box, Rect::new(0.0, 0.0, 10.0, 10.0));
@@ -315,4 +316,69 @@ fn a_sheet_is_framed_on_its_paper() {
             result.crop.left_out
         );
     }
+}
+
+#[test]
+fn the_default_frame_leaves_a_touching_giant_out_and_names_it() {
+    // The giant touches the square -- its insertion point is the square's
+    // centre -- so a cluster of touching corners takes it in and the
+    // picture is the giant's. The default is the guard.
+    let db = with_a_giant();
+    let cluster = to_svg(&db, options(Crop::Cluster));
+    assert_eq!(cluster.view_box, Rect::new(0.0, 0.0, 32565.0, 32565.0));
+    assert!(cluster.crop.left_out.is_empty());
+
+    assert_eq!(ToSvgOptions::default().crop, guarded());
+    let default = to_svg(
+        &db,
+        ToSvgOptions {
+            space: Space::All,
+            padding: 0.0,
+            ..ToSvgOptions::default()
+        },
+    );
+    assert_eq!(default.view_box, Rect::new(0.0, 0.0, 10.0, 10.0));
+    assert_eq!(default.crop.left_out.len(), 1);
+    assert_eq!(default.crop.left_out[0].id, EntityId::new(0x10));
+    assert_eq!(default.crop.left_out[0].reason, LeftOutReason::ScaleOutlier);
+}
+
+#[test]
+fn an_overlay_frames_as_the_render_does_and_names_what_its_original_leaves_out() {
+    use iron_diff_cad::{diff, DiffOptions};
+    use iron_render_cad::{overlay_to_svg, OverlayOptions};
+
+    let before = with_a_giant();
+    let mut after = before.clone();
+    let Entity::Line(l) = &mut after.entities[0] else {
+        unreachable!("the square's first entity is a line")
+    };
+    l.end_point.x = 8.0;
+    let changes = diff(&before, &after, DiffOptions::default());
+    // Every space: these entities name no owning block record.
+    let svg = ToSvgOptions {
+        space: Space::All,
+        ..ToSvgOptions::default()
+    };
+    let overlay = overlay_to_svg(
+        &before,
+        &after,
+        &changes,
+        OverlayOptions {
+            svg,
+            ..OverlayOptions::default()
+        },
+    );
+
+    let render = to_svg(&before, svg);
+    assert_eq!(overlay.view_box, render.view_box);
+    assert_eq!(overlay.marked.len(), 1, "{:?}", overlay.not_marked);
+    assert_eq!(overlay.left_out.len(), 1, "{:?}", overlay.left_out);
+    assert_eq!(overlay.left_out[0].id, EntityId::new(0x10));
+    assert_eq!(overlay.left_out[0].reason, LeftOutReason::ScaleOutlier);
+
+    // The report says why, in the words a caller reads.
+    let report = serde_json::to_value(&overlay).expect("an overlay report serializes");
+    assert_eq!(report["left_out"][0]["reason"], "scale_outlier");
+    assert_eq!(report["left_out"][0]["type_name"], "INSERT");
 }

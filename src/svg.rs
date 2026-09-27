@@ -86,8 +86,8 @@ pub struct ToSvgOptions {
     pub stroke_width: Option<f64>,
     pub space: Space,
     /// How the rectangle the picture shows is chosen from the extents the
-    /// entities measured -- see [`Crop`]. Default [`Crop::Cluster`]; what it
-    /// leaves out is in [`ToSvgResult::crop`].
+    /// entities measured -- see [`Crop`]. Default [`Crop::Guarded`] with
+    /// nothing stated; what it leaves out is in [`ToSvgResult::crop`].
     pub crop: Crop,
     /// How tall a capital letter is in the face the text will be drawn with,
     /// as a fraction of its em (the font's OS/2 `sCapHeight` over its units
@@ -118,7 +118,7 @@ impl Default for ToSvgOptions {
             padding: 5.0,
             stroke_width: None,
             space: Space::Model,
-            crop: Crop::Cluster,
+            crop: Crop::default(),
             cap_height: DEFAULT_CAP_HEIGHT,
             include_hidden: false,
         }

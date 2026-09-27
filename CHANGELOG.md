@@ -62,6 +62,7 @@ bumps the minor version.
 - `Crop::Guarded`, which sets aside outliers far larger or farther than the rest of the drawing,
   and `Crop::Window`, an exact world rectangle; `ToSvgResult::crop` names what the frame leaves out,
   and `OverlayResult::left_out` what an overlay's original layer does not draw.
+  `LeftOutReason::is_set_aside` tells an entity the crop did not draw from one outside the view.
 - The `limits` module: every number from the file that becomes an allocation or a loop bound is
   capped, and what a cap left out is reported in `ToSvgResult::limits` (`LimitReport`).
 - `ToSvgResult::unresolved_block_refs`: the block references whose block the model does not hold.

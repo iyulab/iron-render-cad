@@ -120,6 +120,7 @@ fn the_guard_leaves_a_giant_out_of_the_picture_and_names_it() {
     assert_eq!(giant.id, EntityId::new(0x10));
     assert_eq!(giant.type_name, "INSERT");
     assert_eq!(giant.reason, LeftOutReason::ScaleOutlier);
+    assert!(giant.reason.is_set_aside());
     assert_eq!(giant.extent, Rect::new(5.0, 5.0, 32565.0, 32565.0));
     // ...and not drawn: clipped by the viewBox it would still cross the
     // whole picture.
@@ -235,6 +236,7 @@ fn the_cluster_trim_names_what_it_leaves_outside_the_view() {
     assert_eq!(result.crop.left_out.len(), 1);
     assert_eq!(result.crop.left_out[0].id, EntityId::new(0x9));
     assert_eq!(result.crop.left_out[0].reason, LeftOutReason::OutsideView);
+    assert!(!result.crop.left_out[0].reason.is_set_aside());
     assert!(result.svg.contains("x1=\"1000000\""), "{}", result.svg);
 }
 

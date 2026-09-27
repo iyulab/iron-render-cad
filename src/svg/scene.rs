@@ -421,10 +421,9 @@ impl Scene {
     /// Whether [`crate::to_svg`]'s document holds part `i`: every part but
     /// the outliers the crop set aside.
     pub(super) fn in_document(&self, i: usize) -> bool {
-        !matches!(
-            self.parts[i].left_out,
-            Some(LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier)
-        )
+        !self.parts[i]
+            .left_out
+            .is_some_and(LeftOutReason::is_set_aside)
     }
 }
 

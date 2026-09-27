@@ -8,7 +8,7 @@
 //! whose counterpart is uncertain gets a cloud and no geometry, and a change
 //! the picture cannot show is reported by name rather than dropped.
 
-use super::crop::{LeftOut, LeftOutReason};
+use super::crop::LeftOut;
 use super::format::clean;
 use super::scene::{doc_view_box, Rect, Scene};
 use super::ToSvgOptions;
@@ -366,12 +366,7 @@ pub fn overlay_to_svg(
         .crop
         .left_out
         .iter()
-        .filter(|l| {
-            matches!(
-                l.reason,
-                LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier
-            )
-        })
+        .filter(|l| l.reason.is_set_aside())
         .cloned()
         .collect();
     let proposal_color_conflicts = color_conflicts(

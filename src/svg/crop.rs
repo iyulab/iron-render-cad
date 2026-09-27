@@ -79,6 +79,18 @@ pub enum LeftOutReason {
     OutsideView,
 }
 
+impl LeftOutReason {
+    /// Whether the crop set the entity aside -- it is not drawn at all --
+    /// rather than leaving it outside the view, where it is still in the
+    /// document.
+    pub fn is_set_aside(self) -> bool {
+        matches!(
+            self,
+            LeftOutReason::ScaleOutlier | LeftOutReason::FarOutlier
+        )
+    }
+}
+
 /// A top-level entity the picture does not show.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]

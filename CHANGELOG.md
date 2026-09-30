@@ -77,6 +77,11 @@ bumps the minor version.
 
 ### Fixed
 
+- A MULTILEADER's lines are drawn on to their root's last leader line point, and each root's
+  dogleg from there (`uncad-model`'s `MultiLeaderEntity::drawn_lines` and `doglegs`). A
+  multileader whose lines are a single vertex each -- the usual case -- drew nothing and was
+  not reported. The arrowhead sits where a line starts, as a LEADER's does; it was drawn at
+  the line's other end.
 - A feature control frame (TOLERANCE) is drawn with its MTEXT codes read: the symbol-font
   switch `{\Fgdt;j}` is no longer drawn as text. `%%v`, which has no reading here, stays as
   written.

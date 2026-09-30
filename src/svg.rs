@@ -1519,7 +1519,7 @@ fn drawn_point_count(e: &Entity, tables: &Tables) -> usize {
         Entity::Polyline3D(p) => p.vertices.len(),
         Entity::Spline(s) => s.fit_points.len().saturating_add(s.control_points.len()),
         Entity::Leader(l) => l.vertices.len(),
-        Entity::MultiLeader(m) => m.lines.iter().map(Vec::len).sum(),
+        Entity::MultiLeader(m) => m.leaders.iter().flat_map(|r| &r.lines).map(Vec::len).sum(),
         Entity::MLine(l) => {
             // One polyline per offset the style defines.
             let lines = l
@@ -1690,7 +1690,13 @@ fn numbers_are_real(e: &Entity) -> bool {
             }),
         }),
         Entity::Leader(l) => l.vertices.iter().all(p3),
-        Entity::MultiLeader(m) => m.lines.iter().flatten().all(p3),
+        Entity::MultiLeader(m) => m.leaders.iter().all(|r| {
+            r.lines.iter().flatten().all(p3)
+                && r.last_point.as_ref().is_none_or(p3)
+                && r.dogleg
+                    .as_ref()
+                    .is_none_or(|d| p3(&d.direction) && real(&[d.length]))
+        }),
         Entity::MLine(l) => {
             l.vertices
                 .iter()
@@ -2333,25 +2339,27 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             Some(line + &arrow)
         }
         Entity::MultiLeader(m) => {
-            // An arrowhead is drawn on every line, unconditionally: the real
-            // per-line visibility flag lives in LEADER_Line.flags, which the
-            // geometry-only shim this reads from does not extract.
+            // What the model says is drawn: each line on to its root's last
+            // leader line point, and each dogleg from there. The arrowhead
+            // sits where a line starts, as a LEADER's does, and is drawn on
+            // every line unconditionally: the per-line visibility flag lives
+            // in LEADER_Line.flags, which the model does not carry.
             let mut parts = Vec::new();
-            for line in &m.lines {
-                if line.len() < 2 {
-                    continue;
-                }
-                ctx.consider_all_3d(line);
-                let pts = xy(line);
+            for line in m.drawn_lines() {
+                ctx.consider_all_3d(&line);
+                let pts = xy(&line);
                 parts.push(polyline_element(&pts, false, &color, frame));
-                let n = pts.len();
                 parts.push(arrowhead_element(
-                    &pts[n - 1],
-                    &pts[n - 2],
+                    &pts[0],
+                    &pts[1],
                     ARROWHEAD_SIZE,
                     &color,
                     frame,
                 ));
+            }
+            for dogleg in m.doglegs() {
+                ctx.consider_all_3d(&dogleg);
+                parts.push(polyline_element(&xy(&dogleg), false, &color, frame));
             }
             (!parts.is_empty()).then(|| parts.join("\n  "))
         }
@@ -2558,7 +2566,14 @@ fn reference_point(e: &Entity) -> Option<Point2D> {
             },
         },
         Entity::Leader(l) => p3(l.vertices.first()?),
-        Entity::MultiLeader(m) => p3(m.lines.first()?.first()?),
+        Entity::MultiLeader(m) => {
+            let root = m.leaders.first()?;
+            p3(root
+                .lines
+                .first()
+                .and_then(|l| l.first())
+                .or(root.last_point.as_ref())?)
+        }
         Entity::MLine(l) => p3(&l.vertices.first()?.point),
         Entity::Light(l) => p3(&l.position),
         Entity::Image(i) => *image_outline(i).first()?,
@@ -3695,6 +3710,39 @@ mod tests {
             !render_one(leader(None)).contains("<polygon"),
             "a flag the file did not state is not an arrowhead"
         );
+    }
+
+    fn multileader(last_point: Option<Point3D>) -> Entity {
+        use uncad_model::model::{Dogleg, LeaderRoot, MultiLeaderEntity};
+        let p = |x: f64, y: f64| Point3D { x, y, z: 0.0 };
+        Entity::MultiLeader(MultiLeaderEntity {
+            common: plain_common(),
+            leaders: vec![LeaderRoot {
+                lines: vec![vec![p(0.0, 0.0)]],
+                last_point,
+                dogleg: Some(Dogleg {
+                    direction: p(1.0, 0.0),
+                    length: 2.0,
+                }),
+            }],
+        })
+    }
+
+    #[test]
+    fn a_multileader_line_is_drawn_on_to_its_roots_last_point_and_dogleg() {
+        // One vertex and the root's last point: a line with its arrowhead,
+        // and the dogleg beside it.
+        let svg = render_one(multileader(Some(Point3D {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+        })));
+        assert_eq!(svg.matches("<polyline").count(), 2, "{svg}");
+        assert_eq!(svg.matches("<polygon").count(), 1, "{svg}");
+        // Without it, a single vertex draws nothing -- and there is no
+        // dogleg to draw from.
+        let svg = render_one(multileader(None));
+        assert_eq!(svg.matches("<polyline").count(), 0, "{svg}");
     }
 
     fn image(clipping: Option<bool>, boundary: Vec<Point2D>) -> Entity {

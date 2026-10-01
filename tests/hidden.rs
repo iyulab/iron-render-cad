@@ -164,6 +164,7 @@ fn db(entities: Vec<Entity>, blocks: Vec<(&str, Vec<Entity>)>) -> CadDatabase {
                 .collect(),
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

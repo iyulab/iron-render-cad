@@ -108,6 +108,7 @@ fn a_non_finite_coordinate_never_reaches_an_svg_attribute() {
             block_records,
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
 
@@ -159,6 +160,7 @@ fn a_drawing_with_only_real_numbers_reports_nothing() {
     let db = CadDatabase {
         entities: vec![line(0x10, (0.0, 0.0), (10.0, 10.0))],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let result = to_svg(&db, all());
@@ -195,6 +197,7 @@ fn a_hatch_boundary_bulge_that_is_not_a_number_leaves_the_hatch_out() {
     let db = CadDatabase {
         entities: vec![hatch(0x10, 0.5), hatch(0x11, f64::NAN)],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let result = to_svg(&db, all());

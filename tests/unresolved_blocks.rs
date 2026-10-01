@@ -72,6 +72,7 @@ fn drawing(entities: Vec<Entity>) -> CadDatabase {
             block_records,
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

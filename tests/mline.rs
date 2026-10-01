@@ -39,6 +39,7 @@ fn wall(scale: Option<f64>) -> ToSvgResult {
             mlinestyles: BTreeMap::from([("STANDARD".to_string(), vec![0.5, -0.5])]),
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     to_svg(

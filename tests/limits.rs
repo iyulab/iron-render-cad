@@ -81,6 +81,7 @@ fn db(entities: Vec<Entity>, blocks: Vec<(String, BlockRecord)>) -> CadDatabase 
             block_records,
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

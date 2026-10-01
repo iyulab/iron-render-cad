@@ -50,6 +50,7 @@ fn drawn_height(entity: Entity) -> f64 {
             dim_styles,
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let svg = to_svg(
@@ -96,6 +97,7 @@ fn a_frames_mtext_codes_are_not_drawn_as_text() {
     let db = CadDatabase {
         entities: vec![tolerance(Some(2.5), Ref::Absent)],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let svg = to_svg(

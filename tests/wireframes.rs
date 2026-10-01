@@ -21,6 +21,7 @@ fn region(edges: Vec<[Point3D; 2]>) -> CadDatabase {
             skipped_edges: 0,
         })],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

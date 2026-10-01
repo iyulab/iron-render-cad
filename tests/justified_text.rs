@@ -93,6 +93,7 @@ fn render_one(entity: Entity) -> String {
     render(&CadDatabase {
         entities: vec![entity],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     })
 }

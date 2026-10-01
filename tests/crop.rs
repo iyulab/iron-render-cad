@@ -61,6 +61,7 @@ fn db(entities: Vec<Entity>, blocks: Vec<(&str, Vec<Entity>)>) -> CadDatabase {
                 .collect::<BTreeMap<_, _>>(),
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

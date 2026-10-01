@@ -75,6 +75,7 @@ fn drawing(attrib: Entity) -> CadDatabase {
             attrib,
         ],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

@@ -102,6 +102,7 @@ fn drawing(dxf_shape: bool) -> CadDatabase {
             block_records,
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

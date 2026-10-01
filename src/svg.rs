@@ -3152,6 +3152,7 @@ mod tests {
         let db = CadDatabase {
             entities: vec![entity],
             tables: Tables::default(),
+            header: Default::default(),
             read_diagnostics: Default::default(),
         };
         let options = ToSvgOptions {
@@ -3407,6 +3408,7 @@ mod tests {
                 block_records,
                 ..Tables::default()
             },
+            header: Default::default(),
             read_diagnostics: Default::default(),
         };
         let svg = to_svg(
@@ -3798,6 +3800,7 @@ mod tests {
         let db = CadDatabase {
             entities: vec![e],
             tables: Tables::default(),
+            header: Default::default(),
             read_diagnostics: Default::default(),
         };
         let options = ToSvgOptions {

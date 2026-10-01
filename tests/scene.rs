@@ -61,6 +61,7 @@ fn db(entities: Vec<Entity>) -> CadDatabase {
             layers: BTreeMap::from([("FROZEN".to_string(), frozen)]),
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

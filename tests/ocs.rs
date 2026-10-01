@@ -130,6 +130,7 @@ fn render_one(entity: Entity) -> ToSvgResult {
     render(&CadDatabase {
         entities: vec![entity],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     })
 }

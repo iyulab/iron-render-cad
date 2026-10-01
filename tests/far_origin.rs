@@ -111,6 +111,7 @@ fn far_drawing() -> CadDatabase {
             block_records,
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }
@@ -189,6 +190,7 @@ fn a_drawing_near_the_origin_is_written_in_world_units() {
     let db = CadDatabase {
         entities: vec![line(0x10, (10.0, 10.0), (20.0, 30.0))],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let result = to_svg(&db, all());
@@ -295,6 +297,7 @@ fn every_planar_shape_is_written_about_the_origin_too() {
             }),
         ],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let result = to_svg(&db, all());

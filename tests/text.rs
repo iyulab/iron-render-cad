@@ -66,6 +66,7 @@ fn svg_with(entity: Entity, cap_height: f64) -> String {
     let db = CadDatabase {
         entities: vec![entity],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     to_svg(

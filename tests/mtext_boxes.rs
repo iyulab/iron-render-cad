@@ -63,6 +63,7 @@ fn extent(m: MText) -> [f64; 4] {
         &CadDatabase {
             entities: vec![entity],
             tables: Tables::default(),
+            header: Default::default(),
             read_diagnostics: ReadDiagnostics::default(),
         },
         ToSvgOptions {

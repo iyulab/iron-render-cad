@@ -66,6 +66,7 @@ fn a_control_character_in_a_label_reaches_neither_the_svg_nor_the_png() {
             }),
         ],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let options = ToSvgOptions {
@@ -126,6 +127,7 @@ fn a_label_that_looks_like_a_placeholder_is_drawn_as_written() {
             text(0x92, 20.0, "AFTER"),
         ],
         tables: Tables::default(),
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
     let options = ToSvgOptions {

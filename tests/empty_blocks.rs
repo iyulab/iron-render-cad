@@ -62,6 +62,7 @@ fn a_block_reference_that_draws_nothing_is_named_and_one_that_draws_is_not() {
             block_records,
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     };
 

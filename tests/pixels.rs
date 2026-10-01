@@ -46,6 +46,7 @@ fn frame(x: f64, y: f64) -> CadDatabase {
             block_records: BTreeMap::new(),
             ..Tables::default()
         },
+        header: Default::default(),
         read_diagnostics: ReadDiagnostics::default(),
     }
 }

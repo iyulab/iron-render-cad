@@ -7,6 +7,18 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-02
+
+### Fixed
+
+- A multileader's lines are drawn on to their leader root's last point, and each root's dogleg
+  is drawn from there. A leader line of a single vertex -- the usual case -- drew nothing before.
+
+### Changed
+
+- **Breaking:** built on `uncad-model` 0.3.0 and `iron-diff-cad` 0.3.0 (a drawing's
+  `header`; a multileader's leader roots). Upgrade them together.
+
 ## [0.2.0] - 2026-09-29
 
 ### Changed

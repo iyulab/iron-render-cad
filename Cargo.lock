@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "iron-render-cad"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "iron-diff-cad",
  "resvg",

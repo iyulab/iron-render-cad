@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-02
+
 ### Added
 
 - `Paper` (`ToSvgOptions::paper`): the page a drawing is drawn on. `Paper::Light`, the default,

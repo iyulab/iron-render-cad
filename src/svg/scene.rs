@@ -16,6 +16,7 @@ use super::{
     infinite, resolve_stroke_widths, sheet, CropReport, Hidden, LayoutError, LeftOutReason,
     SheetSource, ToSvgOptions, ViewportReport,
 };
+use crate::color::Paper;
 use crate::limits::LimitReport;
 use crate::png::{parse, Fonts, PngError};
 use resvg::usvg;
@@ -226,6 +227,10 @@ pub struct Scene {
     pub sheet: Option<SheetSource>,
     /// Every text drawn, in drawing order; see [`text_boxes`](Self::text_boxes).
     pub(super) texts: Vec<DrawnText>,
+    /// The page every document of the scene is drawn on
+    /// ([`ToSvgOptions::paper`]): the colors are resolved for it, and a
+    /// dark one is a rectangle under the window each document shows.
+    pub(super) paper: Paper,
 }
 
 /// The document-frame viewBox `[x, y, width, height]` of `window` for a
@@ -285,7 +290,9 @@ impl Scene {
     /// With `window` the scene's [`view_box`](Self::view_box), the stroke
     /// width [`auto_stroke_width`](Self::auto_stroke_width) and every part
     /// kept but the outliers the crop set aside ([`Part::left_out`]), it is
-    /// [`crate::to_svg`]'s document, byte for byte.
+    /// [`crate::to_svg`]'s document, byte for byte. On a dark page
+    /// ([`crate::Paper::Dark`]) the document's first drawn element is a
+    /// black rectangle covering the window.
     pub fn svg(&self, window: Rect, stroke_width: f64, keep: impl Fn(&Part) -> bool) -> String {
         // The scene's own view box is written exactly as the render framed
         // it: going through world units and back can move its last bit.
@@ -366,6 +373,11 @@ impl Scene {
         self.doc_view_box
     }
 
+    /// The page the scene is drawn on.
+    pub(crate) fn paper(&self) -> Paper {
+        self.paper
+    }
+
     /// The document with viewBox `[x, y, width, height]` (document frame)
     /// holding the parts `keep` accepts by index.
     fn assemble(
@@ -375,10 +387,12 @@ impl Scene {
         keep: impl Fn(usize) -> bool,
     ) -> String {
         let [x, y, width, height] = view_box;
+        let root_stroke = root_stroke(self.paper);
+        let page = page(self.paper, view_box);
         let defs_block = self.defs_block(stroke_width);
         let resolved_body = self.layer(view_box, stroke_width, keep);
         format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{stroke_width}\">\n  {defs_block}{resolved_body}\n</svg>"
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"{root_stroke}\" stroke-width=\"{stroke_width}\">\n  {page}{defs_block}{resolved_body}\n</svg>"
         )
     }
 
@@ -424,6 +438,29 @@ impl Scene {
         !self.parts[i]
             .left_out
             .is_some_and(LeftOutReason::is_set_aside)
+    }
+}
+
+/// The document's default stroke color on `paper`: the color an element
+/// that names none would be drawn in, the page's opposite.
+pub(super) fn root_stroke(paper: Paper) -> &'static str {
+    match paper {
+        Paper::Light => "black",
+        Paper::Dark => "white",
+    }
+}
+
+/// The page under a document with viewBox `[x, y, width, height]`
+/// (document frame), with the indent after it: nothing on a light page,
+/// which has no background of its own; otherwise a rectangle in the page's
+/// color covering the whole view, the first thing drawn.
+pub(super) fn page(paper: Paper, [x, y, width, height]: [f64; 4]) -> String {
+    match paper {
+        Paper::Light => String::new(),
+        Paper::Dark => format!(
+            "<rect x=\"{x}\" y=\"{y}\" width=\"{width}\" height=\"{height}\" fill=\"{}\" stroke=\"none\"/>\n  ",
+            paper.hex()
+        ),
     }
 }
 

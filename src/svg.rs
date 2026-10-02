@@ -48,7 +48,7 @@ pub(crate) use sheet::render_layout;
 pub use sheet::{LayoutError, SheetSource, ViewportReport};
 pub use visibility::Hidden;
 
-use crate::color::{effective_layer, resolve_color, DEFAULT_COLOR};
+use crate::color::{effective_layer, resolve_color, Paper, DEFAULT_COLOR};
 use crate::limits::{
     Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
     MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
@@ -104,6 +104,12 @@ pub struct ToSvgOptions {
     /// stated not to plot. Default `false`. Either way they do not count
     /// towards the extent, and [`ToSvgResult::hidden`] counts them.
     pub include_hidden: bool,
+    /// The page the drawing is drawn on, and so the one color drawn as
+    /// its opposite -- see [`Paper`]. Default [`Paper::Light`]: no
+    /// background of its own, pure white drawn black. [`Paper::Dark`]
+    /// starts the document with a black rectangle covering its view and
+    /// draws pure black white.
+    pub paper: Paper,
 }
 
 /// [`ToSvgOptions::cap_height`]'s default, 0.7: sans-serif faces measure
@@ -121,6 +127,7 @@ impl Default for ToSvgOptions {
             crop: Crop::default(),
             cap_height: DEFAULT_CAP_HEIGHT,
             include_hidden: false,
+            paper: Paper::Light,
         }
     }
 }
@@ -343,6 +350,8 @@ struct Ctx<'a> {
     cap_height: f64,
     /// [`ToSvgOptions::include_hidden`].
     include_hidden: bool,
+    /// [`ToSvgOptions::paper`]: what every resolved color is drawn on.
+    paper: Paper,
     /// The layers frozen in the viewport being drawn through (see
     /// [`sheet`]); empty everywhere else.
     viewport_frozen: BTreeSet<String>,
@@ -370,6 +379,7 @@ impl<'a> Ctx<'a> {
             ctx.cap_height = options.cap_height;
         }
         ctx.include_hidden = options.include_hidden;
+        ctx.paper = options.paper;
         ctx
     }
 
@@ -402,6 +412,7 @@ impl<'a> Ctx<'a> {
             viewports: Vec::new(),
             sheet: None,
             texts: self.texts,
+            paper: self.paper,
         }
     }
 
@@ -432,6 +443,7 @@ impl<'a> Ctx<'a> {
             limits: LimitReport::default(),
             cap_height: DEFAULT_CAP_HEIGHT,
             include_hidden: false,
+            paper: Paper::Light,
             viewport_frozen: BTreeSet::new(),
             hidden: 0,
             id_path: Vec::new(),
@@ -1280,6 +1292,7 @@ fn resolve_entity_color(common: &EntityCommon, ctx: &Ctx) -> String {
         effective_layer(common.layer.name(), ctx.inherited_layer.as_deref()),
         ctx.tables,
         &ctx.inherited_color,
+        ctx.paper,
     )
 }
 

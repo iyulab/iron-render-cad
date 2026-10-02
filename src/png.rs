@@ -9,6 +9,7 @@
 //! step instead of risking a version mismatch across independently pinned
 //! crates.
 
+use crate::color::Paper;
 use crate::svg::{self, Part, Rect, Scene, ToSvgOptions};
 use resvg::tiny_skia;
 use resvg::usvg::{self, fontdb};
@@ -42,17 +43,22 @@ pub struct ToPngOptions {
     pub max_edge: u32,
     /// The fonts text is drawn with. Default [`Fonts::System`].
     pub fonts: Fonts,
-    /// What the pixels the drawing does not touch are. Default
-    /// [`Background::White`].
+    /// What the pixels the drawing does not touch are on a light page.
+    /// Default [`Background::White`]. On a dark page
+    /// ([`ToSvgOptions::paper`]) every such pixel is the page, opaque
+    /// black, whatever this says.
     pub background: Background,
 }
 
-/// What the pixels a PNG's drawing does not touch are.
+/// What the pixels a PNG's drawing does not touch are, on a light page
+/// ([`Paper::Light`]), which has no background of its own. A dark page
+/// ([`Paper::Dark`]) is the background: its pixels are opaque black
+/// whichever of these is asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum Background {
-    /// Opaque white. The default: the renderer's colors are chosen for a
-    /// white page (pure white is drawn black), so a transparent image shown
+    /// Opaque white. The default: a light page's colors are chosen for
+    /// white (pure white is drawn black), so a transparent image shown
     /// on a dark viewer or flattened onto black loses the black lines.
     #[default]
     White,
@@ -394,7 +400,7 @@ fn png_result(scene: svg::Scene, options: &ToPngOptions) -> Result<ToPngResult, 
         width,
         height,
         options.max_edge,
-        options.background,
+        page_fill(scene.paper(), options.background),
     )?;
     Ok(ToPngResult {
         png,
@@ -446,7 +452,7 @@ impl Scene {
     /// ([`Scene::svg`]), drawn at exactly `view.width` x `view.height`
     /// pixels, every stroke `stroke_px` pixels wide (a width that is not a
     /// positive number keeps the scene's automatic one), text in `fonts`,
-    /// on `background`.
+    /// on `background` -- or, for a scene drawn on a dark page, on black.
     ///
     /// The view is the caller's, so the picture is exactly that grid of
     /// pixels: pixel `(0, 0)`'s corner at (`view.left`, `view.top`), one
@@ -487,7 +493,7 @@ impl Scene {
             view.width,
             view.height,
             DEFAULT_MAX_EDGE,
-            background,
+            page_fill(self.paper(), background),
         )
     }
 }
@@ -502,7 +508,26 @@ fn rasterize(
 ) -> Result<Vec<u8>, PngError> {
     let tree = parse(svg, fonts)?;
     let (width, height) = pixel_size(&tree, scale);
-    draw(&tree, scale, width, height, max_edge, background)
+    draw(
+        &tree,
+        scale,
+        width,
+        height,
+        max_edge,
+        page_fill(Paper::Light, background),
+    )
+}
+
+/// What the pixmap is filled with before the drawing is: on a dark page the
+/// page itself, whatever `background` says -- the document's rectangle
+/// covers its view, and this the part of an edge pixel past it -- and on a
+/// light page `background`, nothing for a transparent one.
+fn page_fill(paper: Paper, background: Background) -> Option<tiny_skia::Color> {
+    match (paper, background) {
+        (Paper::Dark, _) => Some(tiny_skia::Color::BLACK),
+        (_, Background::White) => Some(tiny_skia::Color::WHITE),
+        (_, Background::Transparent) => None,
+    }
 }
 
 /// `svg` parsed for drawing with `fonts`.
@@ -533,7 +558,7 @@ fn draw(
     width: u32,
     height: u32,
     max_edge: u32,
-    background: Background,
+    fill: Option<tiny_skia::Color>,
 ) -> Result<Vec<u8>, PngError> {
     if width > max_edge || height > max_edge {
         return Err(PngError::TooLarge {
@@ -543,8 +568,8 @@ fn draw(
         });
     }
     let mut pixmap = tiny_skia::Pixmap::new(width, height).ok_or(PngError::EmptyCanvas)?;
-    if background == Background::White {
-        pixmap.fill(tiny_skia::Color::WHITE);
+    if let Some(fill) = fill {
+        pixmap.fill(fill);
     }
 
     catch_panic(|| {
@@ -834,6 +859,52 @@ mod tests {
             (255, 255, 255, 255)
         );
         assert_eq!(corner(Background::Transparent).alpha(), 0);
+    }
+
+    #[test]
+    fn a_dark_page_is_opaque_black_whatever_the_background() {
+        let db: CadDatabase =
+            serde_json::from_str(include_str!("../tests/golden/g1.expected.json"))
+                .expect("the golden model deserializes");
+        let svg = ToSvgOptions {
+            paper: Paper::Dark,
+            ..ToSvgOptions::default()
+        };
+        // A size whose sides are not whole pixels: the last row and column
+        // are only partly inside the view.
+        let size = PngSize::Scale(1.37);
+        for background in [Background::White, Background::Transparent] {
+            let png = to_png(
+                &db,
+                ToPngOptions {
+                    svg,
+                    size,
+                    background,
+                    ..ToPngOptions::default()
+                },
+            )
+            .expect("renders")
+            .png;
+            let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("a PNG");
+            let (w, h) = (pixmap.width(), pixmap.height());
+            for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+                let p = pixmap.pixel(x, y).expect("a pixel");
+                assert_eq!(
+                    (p.red(), p.green(), p.blue(), p.alpha()),
+                    (0, 0, 0, 255),
+                    "corner ({x}, {y}) on {background:?}"
+                );
+            }
+            // The scene's own pictures are drawn on the same page.
+            let scene = Scene::new(&db, svg);
+            let view = View::of(scene.view_box, 0.5).expect("a view");
+            let png = scene
+                .png(&view, 1.0, &Fonts::System, background, |_| true)
+                .expect("renders");
+            let pixmap = tiny_skia::Pixmap::decode_png(&png).expect("a PNG");
+            let p = pixmap.pixel(0, 0).expect("a pixel");
+            assert_eq!((p.red(), p.green(), p.blue(), p.alpha()), (0, 0, 0, 255));
+        }
     }
 
     #[test]

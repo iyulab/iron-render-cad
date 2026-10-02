@@ -7,6 +7,23 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `Paper` (`ToSvgOptions::paper`): the page a drawing is drawn on. `Paper::Light`, the default,
+  is the output so far, byte for byte -- no background, pure white drawn black. `Paper::Dark`
+  starts the document with a black rectangle covering its view, keeps pure white white (ACI 7
+  shows white, as on a dark model space) and draws a resolved pure black white instead; every
+  other color is what the file says. It applies to every render: `to_svg`, `to_png` (whose
+  untouched pixels are then opaque black whatever `Background` says), a layout's sheet, a
+  `Scene`'s documents and pictures, and both layers of `overlay_to_svg` -- the proposal color
+  is drawn as given.
+
+### Changed
+
+- **Breaking:** the `color` module's functions take the page they draw on: `aci_to_hex`,
+  `true_color_to_hex`, `layer_color_hex` and `resolve_color` have a `paper: Paper` argument.
+  `Paper::Light` gives what they returned before.
+
 ## [0.3.0] - 2026-10-02
 
 ### Fixed

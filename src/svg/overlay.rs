@@ -10,7 +10,7 @@
 
 use super::crop::LeftOut;
 use super::format::clean;
-use super::scene::{doc_view_box, Rect, Scene};
+use super::scene::{doc_view_box, page, root_stroke, Rect, Scene};
 use super::ToSvgOptions;
 use iron_diff_cad::{Change, ChangeSet};
 use serde::Serialize;
@@ -29,7 +29,11 @@ pub struct OverlayOptions {
     /// How both states are rendered, with the same meaning as for
     /// [`crate::to_svg`]. The original layer is that render of the first
     /// state; the stroke width, when none is given, is the first state's
-    /// automatic one, and the second state is drawn at the same width.
+    /// automatic one, and the second state is drawn at the same width. On
+    /// a dark page ([`crate::Paper::Dark`]) both states' colors are
+    /// resolved for it and the document starts with a black rectangle
+    /// covering its view, outside the original layer; the proposal color
+    /// is drawn as given.
     pub svg: ToSvgOptions,
     /// The sRGB colour every mark of the change layer is drawn in.
     pub proposal_color: [u8; 3],
@@ -373,8 +377,10 @@ pub fn overlay_to_svg(
         options.proposal_color,
         colors_used(&defs).into_iter().chain(colors_used(&original)),
     );
+    let root_stroke = root_stroke(options.svg.paper);
+    let page = page(options.svg.paper, view_box);
     let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"black\" stroke-width=\"{stroke_width}\">\n  {style}\n  {defs}<g id=\"original\">\n  {original}\n</g>\n  <g id=\"changes\">{layer}\n</g>\n</svg>"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"{root_stroke}\" stroke-width=\"{stroke_width}\">\n  {style}\n  {page}{defs}<g id=\"original\">\n  {original}\n</g>\n  <g id=\"changes\">{layer}\n</g>\n</svg>"
     );
 
     OverlayResult {

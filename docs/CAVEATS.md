@@ -238,16 +238,24 @@ a text string, and one is enough to make the whole SVG unparseable -- and with i
 which is rendered by parsing the SVG. The renderer writes U+FFFD in its place; the model
 keeps what the file said.
 
-## Colors: white becomes black
+## Colors: the page's own color becomes its opposite
 
-The renderer targets a plain white background. ACI index 7 (`0xFFFFFF`, "white/black")
-is AutoCAD's own auto-invert-by-background special case, and a LAYER entry's color can
-report as white unconditionally, so any resolved pure-white color is flipped to black --
-otherwise it is silently invisible, white on white. Applied at every color-producing path,
-not just literal index 7. There is no option for a dark background. A PNG is drawn on
-opaque white by default (`Background::White`), so a viewer that shows it on a dark page
-does not lose the black lines; `Background::Transparent`, and `svg_to_png`, leave the
-background transparent. The PNG is written as 8-bit RGBA either way.
+A render is drawn on a page (`ToSvgOptions::paper`), white by default. ACI index 7
+(`0xFFFFFF`, "white/black") is AutoCAD's own auto-invert-by-background special case, and a
+LAYER entry's color can report as white unconditionally, so on the white page any resolved
+pure-white color is flipped to black -- otherwise it is silently invisible, white on white.
+On the black page (`Paper::Dark`) white stays white, as on a dark model space, and a resolved
+pure black -- a true color, the fallback of a BYBLOCK at the top level or of an unknown layer
+-- is drawn white instead. Applied at every color-producing path, not just literal index 7.
+No other color is adjusted on either page: a light color (yellow, cyan) on the white page,
+or a dark one on the black page, is drawn as the file says, however faint.
+
+The white page has no background of its own in the SVG. A PNG of it is drawn on opaque white
+by default (`Background::White`), so a viewer that shows it on a dark page does not lose the
+black lines; `Background::Transparent`, and `svg_to_png`, leave the background transparent.
+The black page is a black rectangle covering the document's view, the first thing drawn, and
+a PNG of it is opaque black wherever the drawing does not touch, whatever `Background` says.
+The PNG is written as 8-bit RGBA either way.
 
 Inside a block reference, an entity on layer 0 is drawn on the reference's layer -- the
 standard way a symbol drawn on layer 0 takes the color of the layer it is inserted on --

@@ -10,7 +10,8 @@
 //! [`ToSvgResult::limits`] -- rather than dropped in silence -- and what the
 //! drawing itself hides is counted in [`ToSvgResult::hidden`]. The picture
 //! frames the rectangle [`ToSvgOptions::crop`] chooses, and
-//! [`ToSvgResult::crop`] names every entity it leaves out. A paper
+//! [`ToSvgResult::crop`] names every entity it leaves out, on the page
+//! [`ToSvgOptions::paper`] chooses -- white, or black ([`Paper`]). A paper
 //! layout can be drawn as its sheet, with the model shown through its
 //! viewports ([`layout_to_svg`], [`layout_to_png`]). A [`Scene`] keeps one
 //! render -- a [`Part`] per top-level entity, with the box of the world it
@@ -31,6 +32,7 @@ pub mod limits;
 mod png;
 mod svg;
 
+pub use color::Paper;
 pub use png::{
     layout_to_png, svg_to_png, to_png, Background, Fonts, PngError, PngSize, ToPngOptions,
     ToPngResult, View, DEFAULT_MAX_EDGE,

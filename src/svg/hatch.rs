@@ -358,11 +358,15 @@ fn render_pattern_line(
 fn render_gradient(g: &HatchGradient, path_d: &str, ctx: &mut Ctx) -> String {
     let id = ctx.next_def_id("hg");
     // The model carries the stops as the file states them (packed RGB, and
-    // the tint of a single-color gradient); the hex form, the white-on-white
-    // flip and the fade toward white are this renderer's derivations.
-    let color1 = true_color_to_hex(Some(g.color1)).unwrap_or_else(|| DEFAULT_COLOR.to_string());
+    // the tint of a single-color gradient); the hex form, the page's own
+    // color drawn as its opposite and the fade toward white are this
+    // renderer's derivations.
+    let color1 =
+        true_color_to_hex(Some(g.color1), ctx.paper).unwrap_or_else(|| DEFAULT_COLOR.to_string());
     let color2 = match g.color2 {
-        Some(c) => true_color_to_hex(Some(c)).unwrap_or_else(|| DEFAULT_COLOR.to_string()),
+        Some(c) => {
+            true_color_to_hex(Some(c), ctx.paper).unwrap_or_else(|| DEFAULT_COLOR.to_string())
+        }
         None => tint_toward_white(&color1, g.tint),
     };
     let def = if g.is_radial {

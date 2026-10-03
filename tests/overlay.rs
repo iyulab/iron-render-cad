@@ -17,6 +17,17 @@ use serde_json::Value;
 use uncad_model::model::EntityId;
 use uncad_model::CadDatabase;
 
+/// Pairing by reference ID, as a caller that knows the two states are one
+/// drawing asks for it: the states compared here are one drawing and an edit
+/// of it, and a diff's default would otherwise judge their lineage from
+/// header GUIDs this drawing does not state.
+fn by_reference() -> DiffOptions {
+    DiffOptions {
+        matching: iron_diff_cad::Matching::Reference,
+        ..DiffOptions::default()
+    }
+}
+
 fn g1_json() -> Value {
     serde_json::from_str(include_str!("golden/g1.expected.json"))
         .expect("the golden model deserializes")
@@ -119,7 +130,7 @@ fn the_original_layer_is_the_original_render_byte_for_byte() {
     let mut after_json = before_json.clone();
     edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
 
     let alone = to_svg(&before, ToSvgOptions::default()).svg;
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
@@ -139,7 +150,7 @@ fn a_smaller_hole_is_drawn_as_it_became_with_a_cloud_around_both() {
     let mut after_json = before_json.clone();
     edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
 
     assert!(overlay.not_marked.is_empty(), "{:?}", overlay.not_marked);
@@ -171,7 +182,7 @@ fn every_kind_of_change_is_marked_or_reported() {
         e["end_point"]["x"] = (e["end_point"]["x"].as_f64().unwrap() + 1.0).into()
     });
     let (before, after) = (model(&before_json), model(&after_json));
-    let mut changes = diff(&before, &after, DiffOptions::default());
+    let mut changes = diff(&before, &after, by_reference());
     // A change whose counterpart is not decided, and one about an entity
     // neither state has at the top level.
     // Built from its wire form: a change set is a result of the differ, and
@@ -228,7 +239,7 @@ fn every_kind_of_change_is_marked_or_reported() {
 #[test]
 fn a_change_the_render_draws_nothing_for_is_reported() {
     let before = model(&g1_json());
-    let mut changes = diff(&before, &before, DiffOptions::default());
+    let mut changes = diff(&before, &before, by_reference());
     changes.changes = vec![change(serde_json::json!({
         "type": "REMOVED",
         "data": { "id": 9999, "entity_type": "LINE", "provenance": "VECTOR", "confidence": "HIGH" }
@@ -248,7 +259,7 @@ fn the_overlay_is_deterministic_and_takes_the_proposal_colour() {
     edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
     remove(&mut after_json, 290);
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let options = OverlayOptions {
         proposal_color: [0x00, 0x66, 0xcc],
         ..OverlayOptions::default()
@@ -267,7 +278,7 @@ fn an_addition_outside_the_drawing_grows_the_view() {
     add_hole(&mut after_json, 301);
     edit(&mut after_json, 301, &|e| e["center"]["x"] = 1000.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let alone = to_svg(&before, ToSvgOptions::default());
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
     assert!(overlay.view_box.max_x > 1000.0, "{:?}", overlay.view_box);
@@ -281,7 +292,7 @@ fn the_overlay_renders_to_png() {
     let mut after_json = before_json.clone();
     edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
     let png = svg_to_png(&overlay.svg, 1.0).expect("the overlay rasterizes");
     assert!(png.starts_with(b"\x89PNG"));
@@ -294,7 +305,7 @@ fn the_change_layer_is_drawn_in_the_proposal_colour_when_rasterized() {
     let mut after_json = before_json.clone();
     edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
 
     // The tree the rasterizer draws from: the style rule has to have
@@ -338,7 +349,7 @@ fn a_grown_view_draws_the_original_as_the_same_render_of_the_larger_window() {
     add_hole(&mut after_json, 301);
     edit(&mut after_json, 301, &|e| e["center"]["x"] = 1000.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
 
     let scene = Scene::new(&before, ToSvgOptions::default());
@@ -359,7 +370,7 @@ fn framing_the_changes_shows_them_at_a_readable_size() {
     let mut after_json = before_json.clone();
     edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let whole = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
     let framed = overlay_to_svg(
         &before,
@@ -402,7 +413,7 @@ fn framing_the_changes_shows_them_at_a_readable_size() {
 fn framing_no_changes_shows_the_whole_drawing() {
     use iron_render_cad::OverlayFrame;
     let before = model(&g1_json());
-    let changes = diff(&before, &before, DiffOptions::default());
+    let changes = diff(&before, &before, by_reference());
     let framed = overlay_to_svg(
         &before,
         &before,
@@ -427,7 +438,7 @@ fn an_original_color_close_to_the_proposal_color_is_reported() {
     let mut after_json = before_json.clone();
     edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
     let (before, after) = (model(&before_json), model(&after_json));
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
 
     let red = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
     let [conflict] = red.proposal_color_conflicts.as_slice() else {

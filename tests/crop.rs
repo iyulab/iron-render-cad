@@ -349,6 +349,16 @@ fn the_default_frame_leaves_a_touching_giant_out_and_names_it() {
 #[test]
 fn an_overlay_frames_as_the_render_does_and_names_what_its_original_leaves_out() {
     use iron_diff_cad::{diff, DiffOptions};
+    /// Pairing by reference ID, as a caller that knows the two states are one
+    /// drawing asks for it: the states compared here are one drawing and an edit
+    /// of it, and a diff's default would otherwise judge their lineage from
+    /// header GUIDs this drawing does not state.
+    fn by_reference() -> DiffOptions {
+        DiffOptions {
+            matching: iron_diff_cad::Matching::Reference,
+            ..DiffOptions::default()
+        }
+    }
     use iron_render_cad::{overlay_to_svg, OverlayOptions};
 
     let before = with_a_giant();
@@ -357,7 +367,7 @@ fn an_overlay_frames_as_the_render_does_and_names_what_its_original_leaves_out()
         unreachable!("the square's first entity is a line")
     };
     l.end_point.x = 8.0;
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     // Every space: these entities name no owning block record.
     let svg = ToSvgOptions {
         space: Space::All,

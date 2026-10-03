@@ -15,6 +15,17 @@ use uncad_model::model::{Entity, LineEntity, Point3D};
 use uncad_model::tables::{LayerRecord, Tables};
 use uncad_model::{CadDatabase, ReadDiagnostics, Ref};
 
+/// Pairing by reference ID, as a caller that knows the two states are one
+/// drawing asks for it: the states compared here are one drawing and an edit
+/// of it, and a diff's default would otherwise judge their lineage from
+/// header GUIDs this drawing does not state.
+fn by_reference() -> DiffOptions {
+    DiffOptions {
+        matching: iron_diff_cad::Matching::Reference,
+        ..DiffOptions::default()
+    }
+}
+
 fn line(id: u64, layer: &str, color_index: i16, true_color: Option<u32>, y: f64) -> Entity {
     let mut common = common::common_on(id, layer, color_index);
     common.true_color = true_color;
@@ -213,7 +224,7 @@ fn a_redline_on_a_dark_page_starts_with_the_page_and_does_not_count_it() {
         unreachable!()
     };
     l.end_point.x = 30.0;
-    let changes = diff(&before, &after, DiffOptions::default());
+    let changes = diff(&before, &after, by_reference());
     let options = OverlayOptions {
         svg: on(Paper::Dark),
         // Black: were the page counted as a color of the original, it would

@@ -7,6 +7,21 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- A LEADER whose path is a spline, or whose path the file does not state, is no longer drawn
+  as straight segments: the program that draws a spline leader fits the curve through the
+  points, so the file defines no curve to draw. It is left out and reported.
+- A MULTILEADER's lines follow its `line_type`: straight lines are drawn as before, lines of
+  no type are not drawn (arrowheads included), and spline lines or lines of a type the model
+  does not know are left out and reported. Its doglegs, which are straight, are still drawn.
+
+### Added
+
+- `ToSvgResult::undefined_leaders` (and `ToPngResult::undefined_leaders`): the LEADERs and
+  MULTILEADERs left out because the file does not define their curve, by reference ID.
+
+
 ## [0.4.0] - 2026-10-02
 
 ### Added

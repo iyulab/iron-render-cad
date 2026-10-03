@@ -55,9 +55,13 @@ useful than a gap -- but a reader should know which parts are approximate:
 - **A table's block as based at the origin**: an ACAD_TABLE's block is placed without its
   base point (a block reference's is put on its insertion point). Every table block seen so
   far is based at the origin.
-- **A spline LEADER through its vertices**: a leader whose path is a spline is drawn as
-  straight segments through its vertices. The file stores the vertices the spline passes
-  through, not the curve between them, which the drawing program fits.
+- **A leader whose curve the file does not define is not drawn**: a LEADER whose path is a
+  spline, or whose path the file does not state, and a MULTILEADER whose lines are a spline
+  or of a type the model does not know, are left out and listed in `undefined_leaders`. The
+  file stores the points such a curve passes through, not the curve between them, which the
+  drawing program fits; straight segments through them would be a different line. A
+  MULTILEADER's doglegs, which are straight, are still drawn, and its lines of no type are
+  not drawn at all.
 - **Text codes are decoded to what they show, not drawn as formatting**: MTEXT paragraph
   breaks become lines (a blank paragraph keeps its line), stacked text is drawn inline as
   `top/bottom` and a stacked fraction reads `3 1/2` rather than `31/2`, format codes (font,

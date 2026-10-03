@@ -219,6 +219,7 @@ pub struct Scene {
     pub empty_blocks: Vec<String>,
     pub unresolved_block_refs: Vec<EntityId>,
     pub undefined_arcs: Vec<EntityId>,
+    pub undefined_leaders: Vec<EntityId>,
     pub limits: LimitReport,
     pub hidden: usize,
     pub undrawn_viewports: Vec<EntityId>,

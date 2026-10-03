@@ -280,6 +280,9 @@ pub struct ToPngResult {
     pub unresolved_block_refs: Vec<uncad_model::EntityId>,
     /// See [`ToSvgResult::undefined_arcs`](crate::ToSvgResult::undefined_arcs).
     pub undefined_arcs: Vec<uncad_model::EntityId>,
+    /// See
+    /// [`ToSvgResult::undefined_leaders`](crate::ToSvgResult::undefined_leaders).
+    pub undefined_leaders: Vec<uncad_model::EntityId>,
     /// See [`ToSvgResult::limits`](crate::ToSvgResult::limits).
     pub limits: crate::limits::LimitReport,
     /// See [`ToSvgResult::hidden`](crate::ToSvgResult::hidden).
@@ -417,6 +420,7 @@ fn png_result(scene: svg::Scene, options: &ToPngOptions) -> Result<ToPngResult, 
         empty_blocks: scene.empty_blocks,
         unresolved_block_refs: scene.unresolved_block_refs,
         undefined_arcs: scene.undefined_arcs,
+        undefined_leaders: scene.undefined_leaders,
         limits: scene.limits,
         hidden: scene.hidden,
         undrawn_viewports: scene.undrawn_viewports,

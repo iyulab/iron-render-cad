@@ -61,8 +61,8 @@ use std::fmt::Write as _;
 use uncad_model::bulge::{self, BulgeArc, Segment};
 use uncad_model::model::{
     ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath,
-    HatchEdge, ImageEntity, LightType, LwPolylineEntity, MLineVertex, MTextAttachment, Point2D,
-    Point3D, PolylineVertex, Ref,
+    HatchEdge, ImageEntity, LeaderLineType, LeaderPath, LightType, LwPolylineEntity, MLineVertex,
+    MTextAttachment, Point2D, Point3D, PolylineVertex, Ref,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase, Ocs};
@@ -161,6 +161,14 @@ pub struct ToSvgResult {
     /// ([`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)). By
     /// reference ID, sorted, each once. Never part of the extent.
     pub undefined_arcs: Vec<EntityId>,
+    /// The LEADERs and MULTILEADERs whose lines are not drawn because the
+    /// file does not define the curve: a spline path, which the program that
+    /// draws it fits through the points, or a path whose kind the model does
+    /// not know (a LEADER that leaves DXF 72 unstated, a MULTILEADER whose
+    /// [`line_type`](uncad_model::model::MultiLeaderEntity::line_type) is
+    /// `None`). A MULTILEADER's doglegs, which are straight, are still
+    /// drawn. By reference ID, sorted, each once. Never part of the extent.
+    pub undefined_leaders: Vec<EntityId>,
     /// What the renderer's bounds on numbers from the file left out of the
     /// picture -- empty for every well-formed drawing. See
     /// [`crate::limits`].
@@ -299,6 +307,9 @@ struct Ctx<'a> {
     /// ARCs left out because their two angles are equal (see
     /// `ToSvgResult::undefined_arcs`).
     undefined_arcs: BTreeSet<EntityId>,
+    /// Leaders left out because the file does not define their curve (see
+    /// `ToSvgResult::undefined_leaders`).
+    undefined_leaders: BTreeSet<EntityId>,
     tables: &'a Tables,
     depth: u32,
     scale: f64,
@@ -405,6 +416,7 @@ impl<'a> Ctx<'a> {
             empty_blocks: self.empty_blocks.into_iter().collect(),
             unresolved_block_refs: self.unresolved_block_refs.into_iter().collect(),
             undefined_arcs: self.undefined_arcs.into_iter().collect(),
+            undefined_leaders: self.undefined_leaders.into_iter().collect(),
             limits: self.limits,
             hidden: self.hidden,
             undrawn_viewports: Vec::new(),
@@ -426,6 +438,7 @@ impl<'a> Ctx<'a> {
             empty_blocks: BTreeSet::new(),
             unresolved_block_refs: BTreeSet::new(),
             undefined_arcs: BTreeSet::new(),
+            undefined_leaders: BTreeSet::new(),
             tables,
             depth: 0,
             scale: 1.0,
@@ -2339,6 +2352,13 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             if l.vertices.is_empty() {
                 return None;
             }
+            // A spline path is fitted through the vertices by the program
+            // that draws it, and a path whose kind the file does not state
+            // could be either: neither is a curve this renderer can draw.
+            if l.path_type != Some(LeaderPath::Straight) {
+                ctx.undefined_leaders.insert(l.common.id);
+                return None;
+            }
             ctx.consider_all_3d(&l.vertices);
             let pts = xy(&l.vertices);
             let line = polyline_element(&pts, false, &color, frame);
@@ -2354,11 +2374,21 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         Entity::MultiLeader(m) => {
             // What the model says is drawn: each line on to its root's last
             // leader line point, and each dogleg from there. The arrowhead
-            // sits where a line starts, as a LEADER's does, and is drawn on
-            // every line unconditionally: the per-line visibility flag lives
-            // in LEADER_Line.flags, which the model does not carry.
+            // sits where a line starts, as a LEADER's does. Lines of no type
+            // are not drawn, arrowheads included; a spline, or a type the
+            // model does not know, is not a curve this renderer can draw.
+            let lines = match m.line_type {
+                Some(LeaderLineType::Straight) => m.drawn_lines(),
+                Some(LeaderLineType::Invisible) => Vec::new(),
+                Some(LeaderLineType::Spline) | None => {
+                    if !m.drawn_lines().is_empty() {
+                        ctx.undefined_leaders.insert(m.common.id);
+                    }
+                    Vec::new()
+                }
+            };
             let mut parts = Vec::new();
-            for line in m.drawn_lines() {
+            for line in lines {
                 ctx.consider_all_3d(&line);
                 let pts = xy(&line);
                 parts.push(polyline_element(&pts, false, &color, frame));
@@ -2859,6 +2889,7 @@ fn svg_result(scene: Scene, stroke_width: Option<f64>) -> ToSvgResult {
         empty_blocks: scene.empty_blocks,
         unresolved_block_refs: scene.unresolved_block_refs,
         undefined_arcs: scene.undefined_arcs,
+        undefined_leaders: scene.undefined_leaders,
         limits: scene.limits,
         origin: scene.origin,
         hidden: scene.hidden,
@@ -3703,13 +3734,17 @@ mod tests {
     }
 
     fn leader(has_arrowhead: Option<bool>) -> Entity {
+        leader_on(has_arrowhead, Some(LeaderPath::Straight))
+    }
+
+    fn leader_on(has_arrowhead: Option<bool>, path_type: Option<LeaderPath>) -> Entity {
         use uncad_model::model::{LeaderAnnotation, LeaderEntity, Ref};
         let p = |x| Point3D { x, y: 0.0, z: 0.0 };
         Entity::Leader(LeaderEntity {
             common: plain_common(),
             vertices: vec![p(0.0), p(10.0)],
             has_arrowhead,
-            path_type: None,
+            path_type,
             annotation: LeaderAnnotation::Nothing,
             annotation_id: Ref::Absent,
             style_name: Ref::Absent,
@@ -3728,6 +3763,10 @@ mod tests {
     }
 
     fn multileader(last_point: Option<Point3D>) -> Entity {
+        multileader_of(last_point, Some(LeaderLineType::Straight))
+    }
+
+    fn multileader_of(last_point: Option<Point3D>, line_type: Option<LeaderLineType>) -> Entity {
         use uncad_model::model::{Dogleg, LeaderRoot, MultiLeaderEntity};
         let p = |x: f64, y: f64| Point3D { x, y, z: 0.0 };
         Entity::MultiLeader(MultiLeaderEntity {
@@ -3740,7 +3779,58 @@ mod tests {
                     length: 2.0,
                 }),
             }],
+            line_type,
         })
+    }
+
+    fn render_report(entity: Entity) -> ToSvgResult {
+        let db = CadDatabase {
+            entities: vec![entity],
+            tables: Tables::default(),
+            header: Default::default(),
+            read_diagnostics: Default::default(),
+        };
+        to_svg(
+            &db,
+            ToSvgOptions {
+                space: Space::All,
+                ..ToSvgOptions::default()
+            },
+        )
+    }
+
+    #[test]
+    fn a_leader_whose_curve_the_file_does_not_define_is_reported_not_drawn() {
+        for path_type in [Some(LeaderPath::Spline), None] {
+            let r = render_report(leader_on(Some(true), path_type));
+            assert_eq!(r.svg.matches("<polyline").count(), 0, "{}", r.svg);
+            assert_eq!(r.undefined_leaders, [plain_common().id]);
+        }
+        let r = render_report(leader(Some(true)));
+        assert!(r.undefined_leaders.is_empty());
+    }
+
+    #[test]
+    fn a_multileader_draws_its_lines_as_its_line_type_says() {
+        let last = Some(Point3D {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+        });
+        // A spline, or a type not known: the line is reported, not drawn as
+        // a straight one; the dogleg, which is straight, still is.
+        for line_type in [Some(LeaderLineType::Spline), None] {
+            let r = render_report(multileader_of(last, line_type));
+            assert_eq!(r.svg.matches("<polyline").count(), 1, "{}", r.svg);
+            assert_eq!(r.svg.matches("<polygon").count(), 0, "{}", r.svg);
+            assert_eq!(r.undefined_leaders, [plain_common().id]);
+        }
+        // No type: the line and its arrowhead are not drawn, and nothing is
+        // missing from the picture.
+        let r = render_report(multileader_of(last, Some(LeaderLineType::Invisible)));
+        assert_eq!(r.svg.matches("<polyline").count(), 1, "{}", r.svg);
+        assert_eq!(r.svg.matches("<polygon").count(), 0, "{}", r.svg);
+        assert!(r.undefined_leaders.is_empty());
     }
 
     #[test]

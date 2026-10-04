@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-04
+
 ### Added
 
 - A MULTILEADER draws what it points out: its text as an MTEXT with the same fields is drawn (the
@@ -14,6 +16,8 @@ bumps the minor version.
   the stated direction, the text recorded under the multileader's ID), or its block, placed as a
   block reference places one, the block's base point on the location. A leader note was drawn as a
   bare line before.
+- `ToSvgResult::undefined_leaders` (and `ToPngResult::undefined_leaders`): the LEADERs and
+  MULTILEADERs left out because the file does not define their curve, by reference ID.
 
 ### Changed
 
@@ -23,12 +27,8 @@ bumps the minor version.
 - A MULTILEADER's lines follow its `line_type`: straight lines are drawn as before, lines of
   no type are not drawn (arrowheads included), and spline lines or lines of a type the model
   does not know are left out and reported. Its doglegs, which are straight, are still drawn.
-
-### Added
-
-- `ToSvgResult::undefined_leaders` (and `ToPngResult::undefined_leaders`): the LEADERs and
-  MULTILEADERs left out because the file does not define their curve, by reference ID.
-
+- Built on `uncad-model` 0.4.0 (a multileader's line type and content; the header's drawing
+  identifiers) and `iron-diff-cad` 0.4.0.
 
 ## [0.4.0] - 2026-10-02
 

@@ -7,6 +7,13 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- A MULTILEADER draws what it points out: its text as an MTEXT with the same fields is drawn (the
+  same element -- placement by attachment point, lines, rotation from the stated direction, the
+  text recorded under the multileader's ID), or its block, placed as a block reference places
+  one, the block's base point on the location. A leader note was drawn as a bare line before.
+
 ### Changed
 
 - A LEADER whose path is a spline, or whose path the file does not state, is no longer drawn

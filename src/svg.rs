@@ -62,7 +62,7 @@ use uncad_model::bulge::{self, BulgeArc, Segment};
 use uncad_model::model::{
     ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath,
     HatchEdge, ImageEntity, LeaderLineType, LeaderPath, LightType, LwPolylineEntity, MLineVertex,
-    MTextAttachment, Point2D, Point3D, PolylineVertex, Ref,
+    MTextAttachment, MultiLeaderContent, Point2D, Point3D, PolylineVertex, Ref,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase, Ocs};
@@ -1716,13 +1716,25 @@ fn numbers_are_real(e: &Entity) -> bool {
             }),
         }),
         Entity::Leader(l) => l.vertices.iter().all(p3),
-        Entity::MultiLeader(m) => m.leaders.iter().all(|r| {
-            r.lines.iter().flatten().all(p3)
-                && r.last_point.as_ref().is_none_or(p3)
-                && r.dogleg
-                    .as_ref()
-                    .is_none_or(|d| p3(&d.direction) && real(&[d.length]))
-        }),
+        Entity::MultiLeader(m) => {
+            m.leaders.iter().all(|r| {
+                r.lines.iter().flatten().all(p3)
+                    && r.last_point.as_ref().is_none_or(p3)
+                    && r.dogleg
+                        .as_ref()
+                        .is_none_or(|d| p3(&d.direction) && real(&[d.length]))
+            }) && match &m.content {
+                Some(MultiLeaderContent::MText(t)) => {
+                    p3(&t.location)
+                        && p3(&t.direction)
+                        && real(&[t.height, t.rotation, t.width, t.scale])
+                }
+                Some(MultiLeaderContent::Block(b)) => {
+                    p3(&b.location) && p3(&b.scale) && real(&[b.rotation])
+                }
+                None => true,
+            }
+        }
         Entity::MLine(l) => {
             l.vertices
                 .iter()
@@ -1820,6 +1832,96 @@ fn ellipse_arc_extent(el: &EllipseEntity) -> Box2D {
 }
 
 /// [`render_entity`] once the caps have let the entity through.
+/// A text drawn the way an MTEXT is: an MTEXT's own fields, or the text a
+/// MULTILEADER points out, which the format states the same way.
+struct MTextDrawn<'a> {
+    id: EntityId,
+    /// In MTEXT's format codes.
+    text: &'a str,
+    /// The point of the text block `attachment` names.
+    at: Point3D,
+    height: f64,
+    line_spacing_factor: f64,
+    /// Radians, counter-clockwise.
+    rotation: f64,
+    attachment: Option<MTextAttachment>,
+    /// The laid-out block's width and height, as the writing application
+    /// measured them -- see [`MTextEntity::extents_width`].
+    extents: (Option<f64>, Option<f64>),
+    /// The width of the box the text is laid out in; `0` is no box.
+    reference_width: f64,
+}
+
+/// The `<text>` element of an MTEXT-like text, its estimated box considered
+/// and its text recorded under its entity's id. `None` for nothing drawn.
+fn mtext_element(t: &MTextDrawn<'_>, color: &str, ctx: &mut Ctx) -> Option<String> {
+    let frame = ctx.frame;
+    let at = Point2D {
+        x: t.at.x,
+        y: t.at.y,
+    };
+    let decoded = text_codes::decode(t.text, true);
+    // An empty line is a real line: `\P\P` is how a note spaces its
+    // paragraphs, and it takes up its line height.
+    let lines: Vec<&str> = decoded
+        .split('\n')
+        .map(|l| l.strip_suffix('\r').unwrap_or(l))
+        .collect();
+    if lines.iter().all(|l| l.is_empty()) {
+        ctx.consider(at.x, at.y);
+        return Some(String::new());
+    }
+    // A stored 0 means "unset" at render time (the parsed value is
+    // legitimately 0 in real files), not at parse time.
+    let text_height = effective_text_height(t.height);
+    let line_spacing_factor = if t.line_spacing_factor == 0.0 {
+        1.0
+    } else {
+        t.line_spacing_factor
+    };
+    let line_height = text_height * line_spacing_factor * MTEXT_LINE_SPACING;
+    let block = MTextBlock::new(
+        t.extents,
+        t.reference_width,
+        lines.iter().map(|l| l.chars().count()).max().unwrap_or(0),
+        text_height,
+        text_height + line_height * lines.len().saturating_sub(1) as f64,
+        ctx.cap_height,
+    );
+    let estimate =
+        justify::consider_mtext_box(at, t.rotation, t.attachment, &block, text_height, ctx);
+    let id = ctx.record_text(t.id, &lines.join("\n"), estimate);
+    let font_size = text_height / ctx.cap_height;
+    let (x, y) = (frame.x(t.at.x), frame.y(t.at.y));
+    let (anchor, first_baseline) =
+        mtext_placement(t.attachment, y, text_height, line_height, lines.len());
+    let mut tspans = String::new();
+    // An empty line has no characters, so no `<tspan>` of its own:
+    // SVG applies a `dy` to the characters that follow it, and an
+    // empty element has none, so the shift would be lost. Its line
+    // height goes into the next drawn line's `dy` instead.
+    let mut dy = 0.0;
+    for (i, line) in lines.iter().enumerate() {
+        if i > 0 {
+            dy += line_height;
+        }
+        if line.is_empty() {
+            continue;
+        }
+        let _ = write!(
+            tspans,
+            "<tspan x=\"{x}\" dy=\"{}\">{}</tspan>",
+            clean(dy),
+            escape_xml(line)
+        );
+        dy = 0.0;
+    }
+    Some(format!(
+        "<text id=\"{id}\" x=\"{x}\" y=\"{first_baseline}\" font-size=\"{font_size}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
+        neg(t.rotation.to_degrees())
+    ))
+}
+
 fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     let color = resolve_entity_color(e.common(), ctx);
     let frame = ctx.frame;
@@ -2073,72 +2175,21 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 ctx.cap_height,
             ))
         }
-        Entity::MText(m) => {
-            let at = Point2D {
-                x: m.insertion_point.x,
-                y: m.insertion_point.y,
-            };
-            let decoded = text_codes::decode(&m.text, true);
-            // An empty line is a real line: `\P\P` is how a note spaces its
-            // paragraphs, and it takes up its line height.
-            let lines: Vec<&str> = decoded
-                .split('\n')
-                .map(|l| l.strip_suffix('\r').unwrap_or(l))
-                .collect();
-            if lines.iter().all(|l| l.is_empty()) {
-                ctx.consider(at.x, at.y);
-                return Some(String::new());
-            }
-            // A stored 0 means "unset" at render time (the parsed value is
-            // legitimately 0 in real files), not at parse time.
-            let text_height = effective_text_height(m.text_height);
-            let line_spacing_factor = if m.line_spacing_factor == 0.0 {
-                1.0
-            } else {
-                m.line_spacing_factor
-            };
-            let line_height = text_height * line_spacing_factor * MTEXT_LINE_SPACING;
-            let block = MTextBlock::new(
-                (m.extents_width, m.extents_height),
-                m.reference_width,
-                lines.iter().map(|l| l.chars().count()).max().unwrap_or(0),
-                text_height,
-                text_height + line_height * lines.len().saturating_sub(1) as f64,
-                ctx.cap_height,
-            );
-            let estimate =
-                justify::consider_mtext_box(at, m.rotation, m.attachment, &block, text_height, ctx);
-            let id = ctx.record_text(m.common.id, &lines.join("\n"), estimate);
-            let font_size = text_height / ctx.cap_height;
-            let (x, y) = (frame.x(m.insertion_point.x), frame.y(m.insertion_point.y));
-            let (anchor, first_baseline) =
-                mtext_placement(m.attachment, y, text_height, line_height, lines.len());
-            let mut tspans = String::new();
-            // An empty line has no characters, so no `<tspan>` of its own:
-            // SVG applies a `dy` to the characters that follow it, and an
-            // empty element has none, so the shift would be lost. Its line
-            // height goes into the next drawn line's `dy` instead.
-            let mut dy = 0.0;
-            for (i, line) in lines.iter().enumerate() {
-                if i > 0 {
-                    dy += line_height;
-                }
-                if line.is_empty() {
-                    continue;
-                }
-                let _ = write!(
-                    tspans,
-                    "<tspan x=\"{x}\" dy=\"{}\">{}</tspan>",
-                    clean(dy),
-                    escape_xml(line)
-                );
-                dy = 0.0;
-            }
-            Some(format!(
-                "<text id=\"{id}\" x=\"{x}\" y=\"{first_baseline}\" font-size=\"{font_size}\" text-anchor=\"{anchor}\" fill=\"{color}\" stroke=\"none\" transform=\"rotate({} {x} {y})\">{tspans}</text>",
-                neg(m.rotation.to_degrees())
-            ))
-        }
+        Entity::MText(m) => mtext_element(
+            &MTextDrawn {
+                id: m.common.id,
+                text: &m.text,
+                at: m.insertion_point,
+                height: m.text_height,
+                line_spacing_factor: m.line_spacing_factor,
+                rotation: m.rotation,
+                attachment: m.attachment,
+                extents: (m.extents_width, m.extents_height),
+                reference_width: m.reference_width,
+            },
+            &color,
+            ctx,
+        ),
         Entity::Point(p) => {
             ctx.consider(p.position.x, p.position.y);
             Some(point_cross_element(
@@ -2403,6 +2454,67 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             for dogleg in m.doglegs() {
                 ctx.consider_all_3d(&dogleg);
                 parts.push(polyline_element(&xy(&dogleg), false, &color, frame));
+            }
+            // What the leaders point out, at the world location the record
+            // states: a text drawn as an MTEXT is, or a block placed as a
+            // block reference places it (its base point on the location).
+            match &m.content {
+                Some(MultiLeaderContent::MText(t)) => {
+                    // The text's x axis is the direction the record states;
+                    // its rotation field says the same thing as an angle, and
+                    // is what is left when the direction is not stated.
+                    let rotation = if t.direction.x != 0.0 || t.direction.y != 0.0 {
+                        t.direction.y.atan2(t.direction.x)
+                    } else {
+                        t.rotation
+                    };
+                    let text = mtext_element(
+                        &MTextDrawn {
+                            id: m.common.id,
+                            text: &t.text,
+                            at: t.location,
+                            height: t.height,
+                            line_spacing_factor: 1.0,
+                            rotation,
+                            attachment: t.attachment,
+                            extents: (None, None),
+                            reference_width: t.width * t.scale,
+                        },
+                        &color,
+                        ctx,
+                    );
+                    parts.extend(text.filter(|t| !t.is_empty()));
+                }
+                Some(MultiLeaderContent::Block(b)) => {
+                    let base = b
+                        .block_name
+                        .resolved()
+                        .and_then(|name| ctx.tables.block_records.get(name))
+                        .map_or_else(Point3D::default, |block| block.base_point);
+                    let placement = Affine2::placement(
+                        Point2D {
+                            x: -base.x,
+                            y: -base.y,
+                        },
+                        1.0,
+                        1.0,
+                        0.0,
+                    )
+                    .then(&Affine2::placement(
+                        Point2D {
+                            x: b.location.x,
+                            y: b.location.y,
+                        },
+                        b.scale.x,
+                        b.scale.y,
+                        b.rotation,
+                    ));
+                    let svg = render_block_ref(e, &b.block_name, placement, &color, ctx);
+                    if !svg.is_empty() {
+                        parts.push(svg);
+                    }
+                }
+                None => {}
             }
             (!parts.is_empty()).then(|| parts.join("\n  "))
         }
@@ -3849,6 +3961,126 @@ mod tests {
         // dogleg to draw from.
         let svg = render_one(multileader(None));
         assert_eq!(svg.matches("<polyline").count(), 0, "{svg}");
+    }
+
+    fn multileader_pointing_out(content: MultiLeaderContent) -> Entity {
+        let Entity::MultiLeader(mut m) = multileader(Some(Point3D {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+        })) else {
+            unreachable!("a multileader");
+        };
+        m.content = Some(content);
+        Entity::MultiLeader(m)
+    }
+
+    #[test]
+    fn a_multileader_draws_the_text_it_points_out_as_an_mtext_is_drawn() {
+        use uncad_model::model::MultiLeaderText;
+        let p = |x: f64, y: f64| Point3D { x, y, z: 0.0 };
+        let r = render_report(multileader_pointing_out(MultiLeaderContent::MText(
+            MultiLeaderText {
+                text: r"\A1;%%c10 THRU\PDEPTH 5".to_string(),
+                style_name: Ref::Absent,
+                location: p(12.0, 3.0),
+                direction: p(1.0, 0.0),
+                extrusion: Point3D {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 1.0,
+                },
+                height: 2.5,
+                rotation: 0.0,
+                width: 0.0,
+                scale: 1.0,
+                attachment: Some(MTextAttachment::TopLeft),
+            },
+        )));
+        // The leader line, its arrowhead, its dogleg -- and the text, both
+        // lines, under the multileader's id.
+        assert_eq!(r.svg.matches("<polyline").count(), 2, "{}", r.svg);
+        assert_eq!(r.svg.matches("<text").count(), 1, "{}", r.svg);
+        assert!(
+            r.svg.contains("\u{2300}10 THRU") || r.svg.contains("\u{d8}10 THRU"),
+            "{}",
+            r.svg
+        );
+        assert!(r.svg.contains("DEPTH 5"), "{}", r.svg);
+        assert!(r.unsupported_types.is_empty(), "{:?}", r.unsupported_types);
+
+        // Drawn as the same text an MTEXT would be: the same element.
+        let mtext = render_one(Entity::MText(uncad_model::model::MTextEntity {
+            common: plain_common(),
+            insertion_point: p(12.0, 3.0),
+            text: r"\A1;%%c10 THRU\PDEPTH 5".to_string(),
+            text_height: 2.5,
+            rotation: 0.0,
+            line_spacing_factor: 1.0,
+            attachment: Some(MTextAttachment::TopLeft),
+            reference_width: 0.0,
+            extents_width: None,
+            extents_height: None,
+            style_name: Ref::Absent,
+        }));
+        let text_of = |svg: &str| -> String {
+            let start = svg.find("<text").expect("a text");
+            svg[start..start + svg[start..].find("</text>").unwrap()].to_string()
+        };
+        assert_eq!(text_of(&r.svg), text_of(&mtext));
+    }
+
+    #[test]
+    fn a_multileader_draws_the_block_it_points_out_with_its_base_on_the_location() {
+        use uncad_model::model::{LineEntity, MultiLeaderBlock};
+        use uncad_model::tables::BlockRecord;
+        let p = |x: f64, y: f64| Point3D { x, y, z: 0.0 };
+        let mut tables = Tables::default();
+        tables.block_records.insert(
+            "MARK".to_string(),
+            BlockRecord {
+                name: "MARK".to_string(),
+                entities: vec![Entity::Line(LineEntity {
+                    common: plain_common(),
+                    start_point: p(1.0, 1.0),
+                    end_point: p(2.0, 1.0),
+                })],
+                base_point: p(1.0, 1.0),
+            },
+        );
+        let db = CadDatabase {
+            entities: vec![multileader_pointing_out(MultiLeaderContent::Block(
+                MultiLeaderBlock {
+                    block_name: Ref::Resolved("MARK".to_string()),
+                    location: p(20.0, 5.0),
+                    scale: Point3D {
+                        x: 2.0,
+                        y: 2.0,
+                        z: 2.0,
+                    },
+                    rotation: 0.0,
+                    extrusion: Point3D {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 1.0,
+                    },
+                },
+            ))],
+            tables,
+            header: Default::default(),
+            read_diagnostics: Default::default(),
+        };
+        let r = to_svg(
+            &db,
+            ToSvgOptions {
+                space: Space::All,
+                ..ToSvgOptions::default()
+            },
+        );
+        // The block's line, from its base point (1, 1) on the location
+        // (20, 5), twice as long: (20, 5) to (22, 5).
+        assert_eq!(r.svg.matches("<line").count(), 1, "{}", r.svg);
+        assert!(r.empty_blocks.is_empty() && r.unresolved_block_refs.is_empty());
     }
 
     fn image(clipping: Option<bool>, boundary: Vec<Point2D>) -> Entity {

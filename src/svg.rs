@@ -3780,6 +3780,7 @@ mod tests {
                 }),
             }],
             line_type,
+            content: None,
         })
     }
 

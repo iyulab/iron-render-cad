@@ -10,9 +10,10 @@ bumps the minor version.
 ### Added
 
 - A MULTILEADER draws what it points out: its text as an MTEXT with the same fields is drawn (the
-  same element -- placement by attachment point, lines, rotation from the stated direction, the
-  text recorded under the multileader's ID), or its block, placed as a block reference places
-  one, the block's base point on the location. A leader note was drawn as a bare line before.
+  same element -- placement by attachment point, lines spaced by the stated factor, rotation from
+  the stated direction, the text recorded under the multileader's ID), or its block, placed as a
+  block reference places one, the block's base point on the location. A leader note was drawn as a
+  bare line before.
 
 ### Changed
 

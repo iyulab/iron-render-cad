@@ -2474,7 +2474,7 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                             text: &t.text,
                             at: t.location,
                             height: t.height,
-                            line_spacing_factor: 1.0,
+                            line_spacing_factor: t.line_spacing_factor,
                             rotation,
                             attachment: t.attachment,
                             extents: (None, None),
@@ -3991,6 +3991,7 @@ mod tests {
                     z: 1.0,
                 },
                 height: 2.5,
+                line_spacing_factor: 1.5,
                 rotation: 0.0,
                 width: 0.0,
                 scale: 1.0,
@@ -4009,25 +4010,29 @@ mod tests {
         assert!(r.svg.contains("DEPTH 5"), "{}", r.svg);
         assert!(r.unsupported_types.is_empty(), "{:?}", r.unsupported_types);
 
-        // Drawn as the same text an MTEXT would be: the same element.
-        let mtext = render_one(Entity::MText(uncad_model::model::MTextEntity {
-            common: plain_common(),
-            insertion_point: p(12.0, 3.0),
-            text: r"\A1;%%c10 THRU\PDEPTH 5".to_string(),
-            text_height: 2.5,
-            rotation: 0.0,
-            line_spacing_factor: 1.0,
-            attachment: Some(MTextAttachment::TopLeft),
-            reference_width: 0.0,
-            extents_width: None,
-            extents_height: None,
-            style_name: Ref::Absent,
-        }));
+        // Drawn as the same text an MTEXT would be: the same element, its
+        // lines spaced as the record states.
+        let mtext = |line_spacing_factor: f64| {
+            render_one(Entity::MText(uncad_model::model::MTextEntity {
+                common: plain_common(),
+                insertion_point: p(12.0, 3.0),
+                text: r"\A1;%%c10 THRU\PDEPTH 5".to_string(),
+                text_height: 2.5,
+                rotation: 0.0,
+                line_spacing_factor,
+                attachment: Some(MTextAttachment::TopLeft),
+                reference_width: 0.0,
+                extents_width: None,
+                extents_height: None,
+                style_name: Ref::Absent,
+            }))
+        };
         let text_of = |svg: &str| -> String {
             let start = svg.find("<text").expect("a text");
             svg[start..start + svg[start..].find("</text>").unwrap()].to_string()
         };
-        assert_eq!(text_of(&r.svg), text_of(&mtext));
+        assert_eq!(text_of(&r.svg), text_of(&mtext(1.5)));
+        assert_ne!(text_of(&r.svg), text_of(&mtext(1.0)));
     }
 
     #[test]

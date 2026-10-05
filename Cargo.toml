@@ -1,6 +1,6 @@
 [package]
 name = "iron-render-cad"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 # Minimum supported Rust version. Measured, not guessed, and checked by CI's
 # `msrv` job with exactly this toolchain -- raise the two together.
@@ -28,12 +28,12 @@ iter_over_hash_type = "warn"
 [dependencies]
 # The model this crate draws. A version dependency, never a path: this crate
 # must build from a standalone checkout.
-uncad-model = "0.4.0"
+uncad-model = "0.5.0"
 # SVG -> PNG. One crate rather than separate usvg / tiny-skia / fontdb: resvg
 # re-exports all three, which keeps them in lock step.
 resvg = "0.48"
 # The change set an overlay draws. A version dependency, like the model.
-iron-diff-cad = "0.4.0"
+iron-diff-cad = "0.5.0"
 # The overlay's report serializes as JSON, the way the change set does.
 serde = { version = "1.0.229", features = ["derive"] }
 

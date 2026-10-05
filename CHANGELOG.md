@@ -7,6 +7,13 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-05
+
+### Changed
+
+- Built on `uncad-model` 0.5.0 (a table's grid). A table is still drawn through its block.
+- Built on `iron-diff-cad` 0.5.0.
+
 ## [0.5.0] - 2026-10-04
 
 ### Added

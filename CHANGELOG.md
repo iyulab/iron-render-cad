@@ -7,6 +7,14 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- Every SVG document -- a render, a sheet and a redline overlay -- states on its root the world point
+  its coordinates are written relative to, as `data-origin="x y"` (`0 0` for a drawing near the
+  world origin, a point near its middle for one far from it). A reader that has only the file can
+  take a point of the picture back to the drawing: the SVG user unit `(u, v)` is the drawing point
+  `(x + u, y - v)`. The same value as `origin` on the render's result.
+
 ## [0.6.0] - 2026-10-05
 
 ### Changed

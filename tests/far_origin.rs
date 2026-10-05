@@ -38,9 +38,30 @@ fn line(id: u64, from: (f64, f64), to: (f64, f64)) -> Entity {
     })
 }
 
-/// Every number in every attribute of `svg`.
+/// The root's `data-origin`, as the two numbers it states.
+fn stated_origin(svg: &str) -> Point2D {
+    let value = svg
+        .split("data-origin=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .expect("the root states its origin");
+    let mut parts = value.split(' ').map(|n| n.parse::<f64>().unwrap());
+    Point2D {
+        x: parts.next().unwrap(),
+        y: parts.next().unwrap(),
+    }
+}
+
+/// Every number in every attribute of `svg` that the rasterizer reads as
+/// geometry -- all but the root's `data-origin`, which states the far point
+/// itself for a reader of the file, not a coordinate to draw.
 fn numbers(svg: &str) -> Vec<f64> {
-    svg.split('"')
+    let origin = format!("data-origin=\"{}\"", {
+        let o = stated_origin(svg);
+        format!("{} {}", o.x, o.y)
+    });
+    svg.replacen(&origin, "", 1)
+        .split('"')
         .skip(1)
         .step_by(2)
         .flat_map(|value| {
@@ -136,6 +157,9 @@ fn a_far_away_drawing_is_written_about_its_own_middle() {
             y: FAR + 10.0
         }
     );
+    // The file says so itself: a reader of the SVG alone can take a point of
+    // it back to the drawing.
+    assert_eq!(stated_origin(&result.svg), result.origin);
     let largest = numbers(&result.svg)
         .into_iter()
         .map(f64::abs)
@@ -195,6 +219,12 @@ fn a_drawing_near_the_origin_is_written_in_world_units() {
     };
     let result = to_svg(&db, all());
     assert_eq!(result.origin, Point2D { x: 0.0, y: 0.0 });
+    // Stated all the same, so a reader never has to guess it.
+    assert!(
+        result.svg.contains(" data-origin=\"0 0\" "),
+        "{}",
+        result.svg
+    );
     assert!(result
         .svg
         .contains("x1=\"10\" y1=\"-10\" x2=\"20\" y2=\"-30\""));

@@ -197,7 +197,9 @@ pub struct ToSvgResult {
     /// units from the world origin: the rasterizer keeps coordinates in
     /// `f32`, which at 2.5e8 cannot tell two points 16 units apart, so a
     /// far-away drawing is written about a whole-unit point near its own
-    /// middle instead.
+    /// middle instead. The document states it on its root as
+    /// `data-origin="x y"` (`0 0` included), so the file alone is enough to
+    /// take a point of it back to the drawing.
     pub origin: Point2D,
     /// The world rectangle the document shows -- its `viewBox`, padding
     /// included, in drawing units with y up rather than as the document

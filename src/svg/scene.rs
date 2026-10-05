@@ -12,6 +12,7 @@
 //! any subset of the parts, at any stroke width.
 
 use super::bounds::Box2D;
+use super::format::clean;
 use super::{
     infinite, resolve_stroke_widths, sheet, CropReport, Hidden, LayoutError, LeftOutReason,
     SheetSource, ToSvgOptions, ViewportReport,
@@ -245,6 +246,15 @@ pub(super) fn doc_view_box(window: &Rect, origin: Point2D) -> [f64; 4] {
     ]
 }
 
+/// The root's `data-origin` value: the world point the document's
+/// coordinates are written relative to, as `x y` -- what a reader of the file
+/// alone needs to take a point of the picture back to the drawing, `(origin.x
+/// + u, origin.y - v)`. Written on every document, `0 0` included.
+pub(super) fn origin_attribute(origin: Point2D) -> String {
+    // `+ 0.0` turns a negative zero into `0`.
+    format!("{} {}", clean(origin.x) + 0.0, clean(origin.y) + 0.0)
+}
+
 /// The world rectangle of a document-frame viewBox.
 pub(super) fn world_rect([x, y, width, height]: [f64; 4], origin: Point2D) -> Rect {
     Rect::new(
@@ -392,8 +402,9 @@ impl Scene {
         let page = page(self.paper, view_box);
         let defs_block = self.defs_block(stroke_width);
         let resolved_body = self.layer(view_box, stroke_width, keep);
+        let origin = origin_attribute(self.origin);
         format!(
-            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"{root_stroke}\" stroke-width=\"{stroke_width}\">\n  {page}{defs_block}{resolved_body}\n</svg>"
+            "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" data-origin=\"{origin}\" stroke=\"{root_stroke}\" stroke-width=\"{stroke_width}\">\n  {page}{defs_block}{resolved_body}\n</svg>"
         )
     }
 

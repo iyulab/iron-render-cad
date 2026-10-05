@@ -10,7 +10,7 @@
 
 use super::crop::LeftOut;
 use super::format::clean;
-use super::scene::{doc_view_box, page, root_stroke, Rect, Scene};
+use super::scene::{doc_view_box, origin_attribute, page, root_stroke, Rect, Scene};
 use super::ToSvgOptions;
 use iron_diff_cad::{Change, ChangeSet};
 use serde::Serialize;
@@ -379,8 +379,9 @@ pub fn overlay_to_svg(
     );
     let root_stroke = root_stroke(options.svg.paper);
     let page = page(options.svg.paper, view_box);
+    let origin = origin_attribute(b.origin);
     let svg = format!(
-        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" stroke=\"{root_stroke}\" stroke-width=\"{stroke_width}\">\n  {style}\n  {page}{defs}<g id=\"original\">\n  {original}\n</g>\n  <g id=\"changes\">{layer}\n</g>\n</svg>"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"{x} {y} {width} {height}\" data-origin=\"{origin}\" stroke=\"{root_stroke}\" stroke-width=\"{stroke_width}\">\n  {style}\n  {page}{defs}<g id=\"original\">\n  {original}\n</g>\n  <g id=\"changes\">{layer}\n</g>\n</svg>"
     );
 
     OverlayResult {

@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-05
+
 ### Added
 
 - Every SVG document -- a render, a sheet and a redline overlay -- states on its root the world point

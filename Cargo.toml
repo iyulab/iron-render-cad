@@ -1,6 +1,6 @@
 [package]
 name = "iron-render-cad"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 # Minimum supported Rust version. Measured, not guessed, and checked by CI's
 # `msrv` job with exactly this toolchain -- raise the two together.

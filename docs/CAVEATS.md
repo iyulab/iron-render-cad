@@ -52,6 +52,11 @@ useful than a gap -- but a reader should know which parts are approximate:
   alone.
 - **LEADER arrowheads only where the file states one**: a leader whose file omits the
   arrowhead flag is drawn without an arrowhead.
+- **Arrowheads at the size the file states**: a LEADER's arrowhead is its arrow size
+  (DIMASZ) times its overall scale (DIMSCALE), from its own overrides or else its dimension
+  style. A text drawing leaves out a style variable equal to its default, so a style may state
+  no arrow size; that leader, and every MULTILEADER (whose arrow size the model does not
+  carry), is drawn at a fixed default size and named in `unsized_arrowheads`.
 - **A table's block as based at the origin**: an ACAD_TABLE's block is placed without its
   base point (a block reference's is put on its insertion point). Every table block seen so
   far is based at the origin.

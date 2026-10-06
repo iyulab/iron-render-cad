@@ -283,6 +283,9 @@ pub struct ToPngResult {
     /// See
     /// [`ToSvgResult::undefined_leaders`](crate::ToSvgResult::undefined_leaders).
     pub undefined_leaders: Vec<uncad_model::EntityId>,
+    /// See
+    /// [`ToSvgResult::unsized_arrowheads`](crate::ToSvgResult::unsized_arrowheads).
+    pub unsized_arrowheads: Vec<uncad_model::EntityId>,
     /// See [`ToSvgResult::limits`](crate::ToSvgResult::limits).
     pub limits: crate::limits::LimitReport,
     /// See [`ToSvgResult::hidden`](crate::ToSvgResult::hidden).
@@ -421,6 +424,7 @@ fn png_result(scene: svg::Scene, options: &ToPngOptions) -> Result<ToPngResult, 
         unresolved_block_refs: scene.unresolved_block_refs,
         undefined_arcs: scene.undefined_arcs,
         undefined_leaders: scene.undefined_leaders,
+        unsized_arrowheads: scene.unsized_arrowheads,
         limits: scene.limits,
         hidden: scene.hidden,
         undrawn_viewports: scene.undrawn_viewports,

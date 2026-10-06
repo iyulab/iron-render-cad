@@ -7,6 +7,19 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `ToSvgResult::unsized_arrowheads` (and `ToPngResult::unsized_arrowheads`): the LEADERs and
+  MULTILEADERs whose arrowheads are drawn at a default size, the file not stating theirs.
+
+### Changed
+
+- A LEADER's arrowhead is drawn at its arrow size (DIMASZ) times its overall scale (DIMSCALE), each
+  as its own overrides set it or else as the dimension style it names states it -- a scale left
+  unwritten, or 0, is 1. An arrow size of 0 draws no arrowhead. Where neither the leader nor its
+  style states the arrow size, the arrowhead is drawn at the former fixed size and the leader is
+  named in `unsized_arrowheads`; so is every MULTILEADER, whose arrow size the model does not carry.
+
 ## [0.6.1] - 2026-10-05
 
 ### Added

@@ -61,8 +61,9 @@ use std::fmt::Write as _;
 use uncad_model::bulge::{self, BulgeArc, Segment};
 use uncad_model::model::{
     ArcEntity, CircleEntity, EllipseEntity, Entity, EntityCommon, EntityId, HatchBoundaryPath,
-    HatchEdge, ImageEntity, LeaderLineType, LeaderPath, LightType, LwPolylineEntity, MLineVertex,
-    MTextAttachment, MultiLeaderContent, Point2D, Point3D, PolylineVertex, Ref,
+    HatchEdge, ImageEntity, LeaderEntity, LeaderLineType, LeaderPath, LightType, LwPolylineEntity,
+    MLineVertex, MTextAttachment, MultiLeaderContent, OverrideValue, Point2D, Point3D,
+    PolylineVertex, Ref,
 };
 use uncad_model::tables::Tables;
 use uncad_model::{Affine2, CadDatabase, Ocs};
@@ -169,6 +170,12 @@ pub struct ToSvgResult {
     /// `None`). A MULTILEADER's doglegs, which are straight, are still
     /// drawn. By reference ID, sorted, each once. Never part of the extent.
     pub undefined_leaders: Vec<EntityId>,
+    /// The LEADERs and MULTILEADERs whose arrowheads are drawn at a default
+    /// size, the file not stating theirs: a LEADER whose dimension style --
+    /// its own overrides, or the style it names -- states no arrow size
+    /// (DIMASZ), and every MULTILEADER, whose arrow size the model does not
+    /// carry. By reference ID, sorted, each once.
+    pub unsized_arrowheads: Vec<EntityId>,
     /// What the renderer's bounds on numbers from the file left out of the
     /// picture -- empty for every well-formed drawing. See
     /// [`crate::limits`].
@@ -312,6 +319,9 @@ struct Ctx<'a> {
     /// Leaders left out because the file does not define their curve (see
     /// `ToSvgResult::undefined_leaders`).
     undefined_leaders: BTreeSet<EntityId>,
+    /// Leaders whose arrowheads are drawn at a default size (see
+    /// `ToSvgResult::unsized_arrowheads`).
+    unsized_arrowheads: BTreeSet<EntityId>,
     tables: &'a Tables,
     depth: u32,
     scale: f64,
@@ -419,6 +429,7 @@ impl<'a> Ctx<'a> {
             unresolved_block_refs: self.unresolved_block_refs.into_iter().collect(),
             undefined_arcs: self.undefined_arcs.into_iter().collect(),
             undefined_leaders: self.undefined_leaders.into_iter().collect(),
+            unsized_arrowheads: self.unsized_arrowheads.into_iter().collect(),
             limits: self.limits,
             hidden: self.hidden,
             undrawn_viewports: Vec::new(),
@@ -441,6 +452,7 @@ impl<'a> Ctx<'a> {
             unresolved_block_refs: BTreeSet::new(),
             undefined_arcs: BTreeSet::new(),
             undefined_leaders: BTreeSet::new(),
+            unsized_arrowheads: BTreeSet::new(),
             tables,
             depth: 0,
             scale: 1.0,
@@ -1208,10 +1220,49 @@ fn point_cross_element(at: Point2D, color: &str, frame: Frame, scale: f64) -> St
     )
 }
 
-/// The arrowhead size LEADER and MULTILEADER draw at. Not read from the file:
-/// neither the geometry-only MULTILEADER shim nor LEADER's model carries an
-/// arrow size, so one fixed value keeps the two consistent.
-const ARROWHEAD_SIZE: f64 = 2.5;
+/// The size an arrowhead is drawn at when the file does not state one -- a
+/// LEADER whose dimension style states no arrow size, and a MULTILEADER,
+/// whose arrow size the model does not carry. Such a leader is named in
+/// `ToSvgResult::unsized_arrowheads`.
+const DEFAULT_ARROWHEAD_SIZE: f64 = 2.5;
+
+/// The size a LEADER's arrowhead is drawn at: its arrow size (DIMASZ, DXF
+/// 41) times its overall scale (DIMSCALE, DXF 40), each as the leader's own
+/// overrides set it, otherwise as the dimension style it names states it.
+/// A scale the style leaves unwritten is 1, and so is 0, which asks the
+/// drawing program to size by a paper-space viewport's scale -- outside one
+/// it is 1. `None` when neither the leader nor its style states the arrow
+/// size, or a size or scale stated is not a finite number of zero or more.
+fn leader_arrow_size(l: &LeaderEntity, tables: &Tables) -> Option<f64> {
+    let style = l
+        .style_name
+        .resolved()
+        .and_then(|n| tables.dim_styles.get(n));
+    let overridden = |variable: u16| {
+        l.style_overrides
+            .iter()
+            .flatten()
+            .find(|o| o.variable == variable)
+            .and_then(|o| match o.value {
+                OverrideValue::Real(v) => Some(v),
+                OverrideValue::Integer(i) => Some(f64::from(i)),
+                _ => None,
+            })
+    };
+    let size = overridden(41).or_else(|| style.and_then(|s| s.arrow_size))?;
+    let scale = match overridden(40).or_else(|| style.and_then(|s| s.scale)) {
+        None => 1.0,
+        Some(s) => {
+            if s == 0.0 {
+                1.0
+            } else {
+                s
+            }
+        }
+    };
+    let drawn = size * scale;
+    (drawn.is_finite() && size >= 0.0 && scale > 0.0).then_some(drawn)
+}
 
 /// Fixed engineering-isometric projection (30 degrees) for the wireframe
 /// renderer. Not configurable -- a best-effort view, not a real camera.
@@ -2418,7 +2469,16 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             // A leader whose file does not state the flag draws none: an
             // arrowhead is a claim about the drawing, and nothing made it.
             let arrow = if l.has_arrowhead == Some(true) && pts.len() >= 2 {
-                arrowhead_element(&pts[0], &pts[1], ARROWHEAD_SIZE, &color, frame)
+                let size = leader_arrow_size(l, ctx.tables).unwrap_or_else(|| {
+                    ctx.unsized_arrowheads.insert(l.common.id);
+                    DEFAULT_ARROWHEAD_SIZE
+                });
+                // An arrow size of 0 draws no arrowhead.
+                if size > 0.0 {
+                    arrowhead_element(&pts[0], &pts[1], size, &color, frame)
+                } else {
+                    String::new()
+                }
             } else {
                 String::new()
             };
@@ -2445,10 +2505,11 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 ctx.consider_all_3d(&line);
                 let pts = xy(&line);
                 parts.push(polyline_element(&pts, false, &color, frame));
+                ctx.unsized_arrowheads.insert(m.common.id);
                 parts.push(arrowhead_element(
                     &pts[0],
                     &pts[1],
-                    ARROWHEAD_SIZE,
+                    DEFAULT_ARROWHEAD_SIZE,
                     &color,
                     frame,
                 ));
@@ -3004,6 +3065,7 @@ fn svg_result(scene: Scene, stroke_width: Option<f64>) -> ToSvgResult {
         unresolved_block_refs: scene.unresolved_block_refs,
         undefined_arcs: scene.undefined_arcs,
         undefined_leaders: scene.undefined_leaders,
+        unsized_arrowheads: scene.unsized_arrowheads,
         limits: scene.limits,
         origin: scene.origin,
         hidden: scene.hidden,
@@ -3874,6 +3936,114 @@ mod tests {
             !render_one(leader(None)).contains("<polygon"),
             "a flag the file did not state is not an arrowhead"
         );
+    }
+
+    /// A leader from (0, 0) to (10, 0), its arrowhead at (0, 0), naming the
+    /// dimension style "S" with these overrides, rendered with `styles`.
+    fn styled_leader_report(
+        overrides: Option<Vec<uncad_model::model::StyleOverride>>,
+        styles: &[(f64, Option<f64>)],
+    ) -> ToSvgResult {
+        use uncad_model::model::{LeaderAnnotation, LeaderEntity, Ref};
+        use uncad_model::tables::DimStyleRecord;
+        let p = |x| Point3D { x, y: 0.0, z: 0.0 };
+        let mut tables = Tables::default();
+        for &(arrow_size, scale) in styles {
+            tables.dim_styles.insert(
+                "S".to_string(),
+                DimStyleRecord {
+                    name: "S".to_string(),
+                    arrow_size: Some(arrow_size),
+                    scale,
+                    ..DimStyleRecord::default()
+                },
+            );
+        }
+        let db = CadDatabase {
+            entities: vec![Entity::Leader(LeaderEntity {
+                common: plain_common(),
+                vertices: vec![p(0.0), p(10.0)],
+                has_arrowhead: Some(true),
+                path_type: Some(LeaderPath::Straight),
+                annotation: LeaderAnnotation::Nothing,
+                annotation_id: Ref::Absent,
+                style_name: Ref::Resolved("S".to_string()),
+                style_overrides: overrides,
+            })],
+            tables,
+            header: Default::default(),
+            read_diagnostics: Default::default(),
+        };
+        to_svg(
+            &db,
+            ToSvgOptions {
+                space: Space::All,
+                ..ToSvgOptions::default()
+            },
+        )
+    }
+
+    /// How far back from its tip the arrowhead reaches.
+    fn arrow_length(svg: &str) -> f64 {
+        polygon_points(svg, "polygon")
+            .iter()
+            .map(|&(x, _)| x)
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    #[test]
+    fn a_leaders_arrowhead_is_its_styles_arrow_size_times_its_scale() {
+        let r = styled_leader_report(Some(Vec::new()), &[(4.0, Some(2.0))]);
+        assert!((arrow_length(&r.svg) - 8.0).abs() < 1e-9, "{}", r.svg);
+        assert!(r.unsized_arrowheads.is_empty());
+        // A scale the style leaves unwritten, or sets to 0, is 1.
+        for scale in [None, Some(0.0)] {
+            let r = styled_leader_report(None, &[(4.0, scale)]);
+            assert!((arrow_length(&r.svg) - 4.0).abs() < 1e-9, "{}", r.svg);
+        }
+    }
+
+    #[test]
+    fn a_leaders_own_overrides_are_laid_over_its_style() {
+        use uncad_model::model::{OverrideValue, StyleOverride};
+        let overrides = vec![
+            StyleOverride {
+                variable: 41,
+                value: OverrideValue::Real(1.5),
+            },
+            StyleOverride {
+                variable: 40,
+                value: OverrideValue::Integer(3),
+            },
+        ];
+        let r = styled_leader_report(Some(overrides), &[(4.0, Some(2.0))]);
+        assert!((arrow_length(&r.svg) - 4.5).abs() < 1e-9, "{}", r.svg);
+    }
+
+    #[test]
+    fn an_arrow_size_nobody_states_is_drawn_at_the_default_and_said_so() {
+        // The style the leader names is not in the drawing.
+        let r = styled_leader_report(None, &[]);
+        assert!((arrow_length(&r.svg) - DEFAULT_ARROWHEAD_SIZE).abs() < 1e-9);
+        assert_eq!(r.unsized_arrowheads, [plain_common().id]);
+    }
+
+    #[test]
+    fn an_arrow_size_of_zero_draws_no_arrowhead() {
+        let r = styled_leader_report(None, &[(0.0, Some(1.0))]);
+        assert!(!r.svg.contains("<polygon"), "{}", r.svg);
+        assert!(r.unsized_arrowheads.is_empty());
+    }
+
+    #[test]
+    fn a_multileaders_arrowhead_is_drawn_at_the_default_and_said_so() {
+        let r = render_report(multileader(Some(Point3D {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+        })));
+        assert!(r.svg.contains("<polygon"), "{}", r.svg);
+        assert_eq!(r.unsized_arrowheads, [plain_common().id]);
     }
 
     fn multileader(last_point: Option<Point3D>) -> Entity {

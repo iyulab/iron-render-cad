@@ -173,8 +173,9 @@ pub struct ToSvgResult {
     /// The LEADERs and MULTILEADERs whose arrowheads are drawn at a default
     /// size, the file not stating theirs: a LEADER whose dimension style --
     /// its own overrides, or the style it names -- states no arrow size
-    /// (DIMASZ), and every MULTILEADER, whose arrow size the model does not
-    /// carry. By reference ID, sorted, each once.
+    /// (DIMASZ), and a MULTILEADER whose arrow size is not known
+    /// (`MultiLeaderEntity::arrow_size` is `None`). By reference ID, sorted,
+    /// each once.
     pub unsized_arrowheads: Vec<EntityId>,
     /// What the renderer's bounds on numbers from the file left out of the
     /// picture -- empty for every well-formed drawing. See
@@ -1221,8 +1222,8 @@ fn point_cross_element(at: Point2D, color: &str, frame: Frame, scale: f64) -> St
 }
 
 /// The size an arrowhead is drawn at when the file does not state one -- a
-/// LEADER whose dimension style states no arrow size, and a MULTILEADER,
-/// whose arrow size the model does not carry. Such a leader is named in
+/// LEADER whose dimension style states no arrow size, and a MULTILEADER
+/// whose arrow size is not known. Such a leader is named in
 /// `ToSvgResult::unsized_arrowheads`.
 const DEFAULT_ARROWHEAD_SIZE: f64 = 2.5;
 
@@ -2505,14 +2506,14 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
                 ctx.consider_all_3d(&line);
                 let pts = xy(&line);
                 parts.push(polyline_element(&pts, false, &color, frame));
-                ctx.unsized_arrowheads.insert(m.common.id);
-                parts.push(arrowhead_element(
-                    &pts[0],
-                    &pts[1],
-                    DEFAULT_ARROWHEAD_SIZE,
-                    &color,
-                    frame,
-                ));
+                let size = m.arrow_size.unwrap_or_else(|| {
+                    ctx.unsized_arrowheads.insert(m.common.id);
+                    DEFAULT_ARROWHEAD_SIZE
+                });
+                // An arrow size of 0 draws no arrowhead.
+                if size > 0.0 {
+                    parts.push(arrowhead_element(&pts[0], &pts[1], size, &color, frame));
+                }
             }
             for dogleg in m.doglegs() {
                 ctx.consider_all_3d(&dogleg);
@@ -4036,7 +4037,7 @@ mod tests {
     }
 
     #[test]
-    fn a_multileaders_arrowhead_is_drawn_at_the_default_and_said_so() {
+    fn a_multileaders_arrowhead_of_no_known_size_is_drawn_at_the_default_and_said_so() {
         let r = render_report(multileader(Some(Point3D {
             x: 10.0,
             y: 0.0,
@@ -4044,6 +4045,32 @@ mod tests {
         })));
         assert!(r.svg.contains("<polygon"), "{}", r.svg);
         assert_eq!(r.unsized_arrowheads, [plain_common().id]);
+    }
+
+    #[test]
+    fn a_multileaders_arrowhead_is_drawn_at_its_size() {
+        let last = Some(Point3D {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+        });
+        let sized = |size: f64| {
+            let Entity::MultiLeader(mut m) = multileader(last) else {
+                unreachable!()
+            };
+            m.arrow_size = Some(size);
+            render_report(Entity::MultiLeader(m))
+        };
+        let (small, large) = (sized(0.5), sized(4.0));
+        assert!(small.unsized_arrowheads.is_empty());
+        assert!(large.unsized_arrowheads.is_empty());
+        assert!(small.svg.contains("<polygon"), "{}", small.svg);
+        assert_ne!(small.svg, large.svg);
+        // A size of 0 draws no arrowhead; the line is still drawn.
+        let none = sized(0.0);
+        assert!(!none.svg.contains("<polygon"), "{}", none.svg);
+        assert!(none.svg.contains("<polyline"), "{}", none.svg);
+        assert!(none.unsized_arrowheads.is_empty());
     }
 
     fn multileader(last_point: Option<Point3D>) -> Entity {
@@ -4064,6 +4091,7 @@ mod tests {
                 }),
             }],
             line_type,
+            arrow_size: None,
             content: None,
         })
     }

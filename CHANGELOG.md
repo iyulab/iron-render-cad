@@ -7,12 +7,16 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-07
+
 ### Changed
 
 - A MULTILEADER's arrowheads are drawn at the size its model record carries
   (`MultiLeaderEntity::arrow_size`); 0 draws none. Only a MULTILEADER whose arrow size is not
   known is drawn at the default size and named in `unsized_arrowheads` -- before, every
   MULTILEADER was.
+
+- Built on `iron-diff-cad` 0.7.0 and `uncad-model` 0.7.0.
 
 ## [0.7.0] - 2026-10-07
 

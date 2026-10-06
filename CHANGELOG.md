@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-07
+
 ### Added
 
 - `ToSvgResult::unsized_arrowheads` (and `ToPngResult::unsized_arrowheads`): the LEADERs and
@@ -19,6 +21,7 @@ bumps the minor version.
   unwritten, or 0, is 1. An arrow size of 0 draws no arrowhead. Where neither the leader nor its
   style states the arrow size, the arrowhead is drawn at the former fixed size and the leader is
   named in `unsized_arrowheads`; so is every MULTILEADER, whose arrow size the model does not carry.
+- Built on `uncad-model` 0.6.0 and `iron-diff-cad` 0.6.0.
 
 ## [0.6.1] - 2026-10-05
 

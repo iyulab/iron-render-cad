@@ -14,8 +14,8 @@
 use super::bounds::Box2D;
 use super::format::clean;
 use super::{
-    infinite, resolve_stroke_widths, sheet, CropReport, Hidden, LayoutError, LeftOutReason,
-    SheetSource, ToSvgOptions, ViewportReport,
+    infinite, resolve_point_sizes, resolve_stroke_widths, sheet, CropReport, Hidden, LayoutError,
+    LeftOutReason, SheetSource, ToSvgOptions, ViewportReport,
 };
 use crate::color::Paper;
 use crate::limits::LimitReport;
@@ -428,7 +428,11 @@ impl Scene {
             .map(|(_, svg)| svg.as_str())
             .collect();
         infinite::resolve(
-            resolve_stroke_widths(&body.join("\n  "), stroke_width),
+            resolve_point_sizes(
+                &resolve_stroke_widths(&body.join("\n  "), stroke_width),
+                height,
+                stroke_width,
+            ),
             infinite::window(x, y, width, height, stroke_width),
         )
     }

@@ -66,7 +66,7 @@ use uncad_model::model::{
     PolylineVertex, Ref,
 };
 use uncad_model::tables::Tables;
-use uncad_model::{Affine2, CadDatabase, Ocs};
+use uncad_model::{Affine2, CadDatabase, Ocs, PointDisplay, PointFigure, PointSize};
 
 /// Which of a drawing's spaces to render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,13 +388,17 @@ struct Ctx<'a> {
     id_path: Vec<EntityId>,
     /// Every text drawn so far, in drawing order (see [`Scene::text_boxes`]).
     texts: Vec<scene::DrawnText>,
+    /// How the drawing shows its POINTs (`$PDMODE` · `$PDSIZE`); `None`
+    /// when its header does not say -- see [`point_element`].
+    point_display: Option<PointDisplay>,
 }
 
 impl<'a> Ctx<'a> {
-    /// A context for a render written about `origin`, set up as `options`
-    /// say.
-    fn configured(tables: &'a Tables, options: &ToSvgOptions, origin: Point2D) -> Self {
-        let mut ctx = Ctx::new(tables);
+    /// A context for a render of `db` written about `origin`, set up as
+    /// `options` say.
+    fn configured(db: &'a CadDatabase, options: &ToSvgOptions, origin: Point2D) -> Self {
+        let mut ctx = Ctx::new(&db.tables);
+        ctx.point_display = db.header.point_display();
         ctx.frame = Frame {
             ox: origin.x,
             oy: origin.y,
@@ -476,6 +480,7 @@ impl<'a> Ctx<'a> {
             hidden: 0,
             id_path: Vec::new(),
             texts: Vec::new(),
+            point_display: None,
         }
     }
 
@@ -1196,8 +1201,125 @@ fn arrowhead_element(
     )
 }
 
-/// Half the arm length of the cross a POINT draws, in stroke widths.
+/// Half the arm length of the cross a POINT draws when the drawing does not
+/// say how its points are shown, in stroke widths.
 const POINT_CROSS_ARMS: f64 = 2.0;
+
+/// The radius of the dot `$PDMODE` 0 draws, in stroke widths: the smallest
+/// mark a display draws is constant on the page, and so is this.
+const POINT_DOT_RADIUS: f64 = 1.5;
+
+/// A POINT as the drawing says its points are shown (`$PDMODE` ·
+/// `$PDSIZE`, read by [`uncad_model::HeaderVariables::point_display`]):
+/// a dot, nothing, a plus, a cross or a tick, and a circle and a square
+/// around it. A drawing that does not say gets [`point_cross_element`].
+///
+/// Everything is written in stroke widths about the point, through the
+/// same placeholder the strokes use, so the marks keep the stroke's weight.
+/// The figure's size is the file's: an absolute `$PDSIZE` in drawing units
+/// (world units -- a display setting of the drawing, not of a block), a
+/// relative one as that fraction of the picture's height; both resolve once
+/// the view is known ([`point_size_placeholder`]). A size the file does not
+/// state draws the figure at the default cross's size. Only the point
+/// itself counts towards the extent.
+fn point_element(
+    at: Point2D,
+    display: Option<PointDisplay>,
+    color: &str,
+    frame: Frame,
+    scale: f64,
+) -> String {
+    let Some(d) = display else {
+        return point_cross_element(at, color, frame, scale);
+    };
+    // Half the figure's size, in stroke widths.
+    let h = match d.size {
+        Some(PointSize::Absolute(s)) => point_size_placeholder(s / 2.0, 0.0),
+        Some(PointSize::ViewFraction(f)) => point_size_placeholder(0.0, f / 2.0),
+        None => POINT_CROSS_ARMS.to_string(),
+    };
+    let stroke = format!("fill=\"none\" stroke=\"{color}\" stroke-width=\"1\"");
+    let mut marks = String::new();
+    match d.figure {
+        PointFigure::Dot => {
+            let _ = write!(
+                marks,
+                "<circle r=\"{POINT_DOT_RADIUS}\" fill=\"{color}\" stroke=\"none\"/>"
+            );
+        }
+        PointFigure::Nothing => {}
+        PointFigure::Plus => {
+            let _ = write!(
+                marks,
+                "<path d=\"M -{h} 0 L {h} 0 M 0 -{h} L 0 {h}\" {stroke}/>"
+            );
+        }
+        PointFigure::Cross => {
+            let _ = write!(
+                marks,
+                "<path d=\"M -{h} -{h} L {h} {h} M -{h} {h} L {h} -{h}\" {stroke}/>"
+            );
+        }
+        // Up on the page is down in SVG's y.
+        PointFigure::Tick => {
+            let _ = write!(marks, "<path d=\"M 0 0 L 0 -{h}\" {stroke}/>");
+        }
+    }
+    if d.circle {
+        let _ = write!(marks, "<circle r=\"{h}\" {stroke}/>");
+    }
+    if d.square {
+        let _ = write!(
+            marks,
+            "<path d=\"M -{h} -{h} L {h} -{h} L {h} {h} L -{h} {h} Z\" {stroke}/>"
+        );
+    }
+    if marks.is_empty() {
+        return String::new();
+    }
+    format!(
+        "<g transform=\"translate({} {}) scale({})\">{marks}</g>",
+        frame.x(at.x),
+        frame.y(at.y),
+        stroke_width_placeholder(scale)
+    )
+}
+
+/// A POINT figure's size in stroke widths -- `world` drawing units plus
+/// `view` times the picture's height -- which, like the stroke width, is
+/// only known once the view is: [`resolve_point_sizes`] substitutes
+/// `(world + view * height) / stroke width`. Inside a scaled block the
+/// figure is wrapped in the same stroke-width scale as at the top level, so
+/// the substitution needs no scale of its own.
+fn point_size_placeholder(world: f64, view: f64) -> String {
+    format!("@@PT@@{world}@@{view}@@")
+}
+
+/// Resolves every [`point_size_placeholder`] for a picture `height` world
+/// units high drawn at `stroke_width`.
+pub(super) fn resolve_point_sizes(body: &str, height: f64, stroke_width: f64) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut rest = body;
+    loop {
+        let Some(start) = rest.find("@@PT@@") else {
+            out.push_str(rest);
+            break;
+        };
+        out.push_str(&rest[..start]);
+        let after = &rest[start + "@@PT@@".len()..];
+        let mut fields = after.splitn(3, "@@");
+        let (Some(world), Some(view), Some(tail)) = (fields.next(), fields.next(), fields.next())
+        else {
+            out.push_str(&rest[start..]);
+            break;
+        };
+        let world: f64 = world.parse().unwrap_or(0.0);
+        let view: f64 = view.parse().unwrap_or(0.0);
+        let _ = write!(out, "{}", (world + view * height) / stroke_width);
+        rest = tail;
+    }
+    out
+}
 
 /// The marker a POINT draws: a cross whose size is set in stroke widths, not
 /// in drawing units.
@@ -2246,11 +2368,12 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         ),
         Entity::Point(p) => {
             ctx.consider(p.position.x, p.position.y);
-            Some(point_cross_element(
+            Some(point_element(
                 Point2D {
                     x: p.position.x,
                     y: p.position.y,
                 },
+                ctx.point_display,
                 &color,
                 frame,
                 ctx.scale,
@@ -2839,7 +2962,7 @@ fn choose_origin(selected: &[&Entity]) -> Point2D {
 pub(crate) fn render(db: &CadDatabase, options: ToSvgOptions) -> Scene {
     let selected = select_entities_for_space(db, options.space);
     let origin = choose_origin(&selected);
-    let mut ctx = Ctx::configured(&db.tables, &options, origin);
+    let mut ctx = Ctx::configured(db, &options, origin);
     let mut walked = walk(&selected, &mut ctx);
     let framed = crop_parts(&mut walked, options.crop);
     let view_box = view_box_of(&framed.content_or_origin(), options.padding, origin);
@@ -3293,6 +3416,90 @@ mod tests {
             0.25,
         );
         assert!(nested.contains("scale(0.0625)"), "{nested}");
+    }
+
+    fn shown(pdmode: i16, pdsize: f64) -> Option<PointDisplay> {
+        uncad_model::HeaderVariables {
+            pdmode: Some(pdmode),
+            pdsize: Some(pdsize),
+            ..Default::default()
+        }
+        .point_display()
+    }
+
+    #[test]
+    fn a_point_is_shown_as_its_drawing_says() {
+        let at = Point2D { x: 7.0, y: 9.0 };
+        let el = |d| point_element(at, d, "#000000", Frame::default(), 1.0);
+        // 0: a dot, page-sized like the stroke -- and no cross.
+        let dot = el(shown(0, 0.0));
+        assert!(dot.contains("<circle r=\"1.5\" fill=\"#000000\""), "{dot}");
+        assert!(!dot.contains("<path"), "{dot}");
+        // 1: nothing at all.
+        assert_eq!(el(shown(1, 0.0)), "");
+        // 35: a cross in a circle, 2.5 drawing units across. At a stroke of
+        // 0.25 units, half of it is 1.25 / 0.25 = 5 stroke widths.
+        let circled = resolve_point_sizes(
+            &resolve_stroke_widths(&el(shown(35, 2.5)), 0.25),
+            100.0,
+            0.25,
+        );
+        assert!(circled.contains("M -5 -5 L 5 5 M -5 5 L 5 -5"), "{circled}");
+        assert!(circled.contains("<circle r=\"5\""), "{circled}");
+        assert!(circled.contains("scale(0.25)"), "{circled}");
+        // 66: a plus in a square, 10 % of the picture's height: in a picture
+        // 100 units high at a stroke of 0.25, half of 10 units is 20 strokes.
+        let boxed = resolve_point_sizes(&el(shown(66, -10.0)), 100.0, 0.25);
+        assert!(boxed.contains("M -20 0 L 20 0 M 0 -20 L 0 20"), "{boxed}");
+        assert!(
+            boxed.contains("M -20 -20 L 20 -20 L 20 20 L -20 20 Z"),
+            "{boxed}"
+        );
+        // 4 with PDSIZE 0 (5 %): a tick up, half the size long.
+        let tick = resolve_point_sizes(&el(shown(4, 0.0)), 100.0, 0.25);
+        assert!(tick.contains("M 0 0 L 0 -10"), "{tick}");
+        // A drawing that does not say: the default cross.
+        assert_eq!(
+            el(None),
+            point_cross_element(at, "#000000", Frame::default(), 1.0)
+        );
+    }
+
+    #[test]
+    fn a_rendered_point_follows_the_header() {
+        let point = Entity::Point(uncad_model::model::PointEntity {
+            common: plain_common(),
+            position: Point3D {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        });
+        let render = |pdmode: Option<i16>| {
+            let db = CadDatabase {
+                entities: vec![point.clone()],
+                tables: Tables::default(),
+                header: uncad_model::HeaderVariables {
+                    pdmode,
+                    pdsize: Some(0.0),
+                    ..Default::default()
+                },
+                read_diagnostics: Default::default(),
+            };
+            to_svg(
+                &db,
+                ToSvgOptions {
+                    space: Space::All,
+                    ..ToSvgOptions::default()
+                },
+            )
+            .svg
+        };
+        assert!(render(Some(0)).contains("<circle r=\"1.5\""));
+        assert!(!render(Some(1)).contains("<path"));
+        assert!(!render(Some(1)).contains("<circle"));
+        assert!(render(None).contains("M -2 0 L 2 0 M 0 -2 L 0 2"));
+        assert!(!render(Some(3)).contains("@@"), "{}", render(Some(3)));
     }
 
     fn p3(x: f64, y: f64, z: f64) -> Point3D {

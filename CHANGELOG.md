@@ -7,6 +7,13 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- A POINT is drawn as the drawing's header says points are shown (`$PDMODE`, `$PDSIZE`): a dot,
+  nothing, a plus, a cross or a tick, with a circle and a square around it, at the stated size --
+  in drawing units, or as a fraction of the picture's height. Before, every point was a small
+  cross; it still is where the header does not state the mode.
+
 ## [0.8.0] - 2026-10-07
 
 ### Changed

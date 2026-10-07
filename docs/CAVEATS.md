@@ -58,6 +58,12 @@ useful than a gap -- but a reader should know which parts are approximate:
   style variable equal to its default, so a style may state no arrow size; that leader, and a
   MULTILEADER whose arrow size is not known, is drawn at a fixed default size and named in
   `unsized_arrowheads`.
+- **POINTs as the drawing shows them**: the header's point mode and size (`$PDMODE`,
+  `$PDSIZE`) give the figure -- a dot, nothing, a plus, a cross or a tick, with a circle
+  and a square around it -- and its size: an absolute size in drawing units (not scaled with
+  a block), a relative one as that fraction of the picture's height. The dot is a fixed mark
+  on the page, as a display draws one. A drawing whose header does not state the mode gets a
+  small cross; a size it does not state draws the figure at that cross's size.
 - **A table's block as based at the origin**: an ACAD_TABLE's block is placed without its
   base point (a block reference's is put on its insertion point). Every table block seen so
   far is based at the origin.

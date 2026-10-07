@@ -131,7 +131,7 @@ pub(crate) fn render_layout(
         ox: paper_origin.x,
         oy: paper_origin.y,
     };
-    let mut ctx = Ctx::configured(&db.tables, &options, paper_origin);
+    let mut ctx = Ctx::configured(db, &options, paper_origin);
     let mut walked = walk(&paper, &mut ctx);
     let paper_parts = walked.len();
 

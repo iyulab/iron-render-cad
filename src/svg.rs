@@ -3266,6 +3266,7 @@ mod tests {
                 base_point: Default::default(),
                 name: "R".to_string(),
                 entities: children,
+                external_reference: None,
             },
         );
         let tables = Tables {
@@ -3812,6 +3813,7 @@ mod tests {
                 base_point: Default::default(),
                 name: "M".to_string(),
                 entities: vec![line],
+                external_reference: None,
             },
         );
         let db = CadDatabase {
@@ -4458,6 +4460,7 @@ mod tests {
                     end_point: p(2.0, 1.0),
                 })],
                 base_point: p(1.0, 1.0),
+                external_reference: None,
             },
         );
         let db = CadDatabase {

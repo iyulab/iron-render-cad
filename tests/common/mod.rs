@@ -15,6 +15,7 @@ pub fn block_record(name: &str, entities: Vec<Entity>) -> BlockRecord {
         base_point: Default::default(),
         name: name.to_string(),
         entities,
+        external_reference: None,
     }
 }
 

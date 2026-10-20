@@ -418,6 +418,70 @@ fn a_removal_inside_a_block_is_drawn_dashed_where_it_was() {
     assert!(layer.contains("<g class=\"removed\""), "{layer}");
 }
 
+/// Every mark says how large its cloud is in the picture: the cloud's
+/// longer side, its margin of ten strokes included, over the picture's.
+/// Framing the changes makes the same mark a larger share.
+#[test]
+fn a_mark_says_how_large_its_cloud_is_in_the_picture() {
+    use iron_render_cad::OverlayFrame;
+    let before_json = g1_json();
+    let mut after_json = before_json.clone();
+    edit(&mut after_json, 289, &|e| e["radius"] = 4.0.into());
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, by_reference());
+    let whole = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+    let [mark] = whole.marked.as_slice() else {
+        panic!("{:?}", whole.marked)
+    };
+    let longer = |w: f64, h: f64| w.max(h);
+    let m = whole.stroke_width * 10.0;
+    let c = mark.cloud;
+    let expected = longer(c.max_x - c.min_x + 2.0 * m, c.max_y - c.min_y + 2.0 * m)
+        / longer(whole.view_box.width(), whole.view_box.height());
+    assert!(
+        (mark.share - expected).abs() < 1e-12,
+        "{} {expected}",
+        mark.share
+    );
+    assert!(mark.share > 0.0 && mark.share < 1.0, "{}", mark.share);
+
+    let framed = overlay_to_svg(
+        &before,
+        &after,
+        &changes,
+        OverlayOptions {
+            frame: OverlayFrame::Changes,
+            ..OverlayOptions::default()
+        },
+    );
+    assert!(framed.marked[0].share > mark.share, "{:?}", framed.marked);
+    let report = serde_json::to_value(mark).unwrap();
+    assert!(report["share"].is_f64(), "{report}");
+}
+
+/// A change inside a block that a top-level reference reaches but that is
+/// drawn in neither state -- here, an invisible line -- is reported as
+/// drawn nowhere, not as out of reach.
+#[test]
+fn a_change_inside_a_block_drawn_nowhere_is_reported_as_nothing_drawn() {
+    let mut before_json = g2_json();
+    edit(&mut before_json, 261, &|e| {
+        e["common"]["invisible"] = true.into()
+    });
+    let mut after_json = before_json.clone();
+    g2_with_longer_line(&mut after_json);
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, by_reference());
+    let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+
+    assert!(overlay.marked.is_empty(), "{:?}", overlay.marked);
+    let [not] = overlay.not_marked.as_slice() else {
+        panic!("{:?}", overlay.not_marked)
+    };
+    assert_eq!(not.id, EntityId::new(261));
+    assert_eq!(not.reason, NotMarkedReason::NothingDrawn);
+}
+
 #[test]
 fn a_change_the_render_draws_nothing_for_is_reported() {
     let before = model(&g1_json());

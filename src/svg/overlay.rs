@@ -107,6 +107,12 @@ pub struct Mark {
     /// where that reference puts it. Empty for a top-level entity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via: Vec<EntityId>,
+    /// How large the drawn cloud is in the picture: its longer side, margin
+    /// included, over the longer side of [`OverlayResult::view_box`]. A
+    /// picture `n` pixels across draws the cloud about `share * n` pixels
+    /// long -- a caller that knows its size can tell a mark too small to
+    /// see, and frame the changes instead ([`OverlayFrame::Changes`]).
+    pub share: f64,
 }
 
 /// Why a marked change's entity is not drawn from the second state.
@@ -295,6 +301,15 @@ pub fn overlay_to_svg(
                 after_id.map(|id| (after, id)),
                 options.svg,
             );
+            if placed.marks.is_empty() && placed.reached {
+                not_marked.push(NotMarked {
+                    entry,
+                    kind,
+                    id: change.id(),
+                    reason: NotMarkedReason::NothingDrawn,
+                });
+                continue;
+            }
             if !placed.marks.is_empty() {
                 for (via, cloud, drawn) in placed.marks {
                     clouds.push((cloud, false));
@@ -306,6 +321,7 @@ pub fn overlay_to_svg(
                         cloud,
                         not_drawn: None,
                         via: vec![via],
+                        share: 0.0,
                     });
                 }
                 placed_layers.extend(placed.layers);
@@ -368,6 +384,7 @@ pub fn overlay_to_svg(
             cloud,
             not_drawn,
             via: Vec::new(),
+            share: 0.0,
         });
     }
 
@@ -406,6 +423,12 @@ pub fn overlay_to_svg(
             (window, stroke_width)
         }
     };
+    let longer = |r: &Rect| r.width().max(r.height());
+    let margin = cloud_margin(stroke_width);
+    for mark in &mut marked {
+        let share = longer(&pad(mark.cloud, margin)) / longer(&window);
+        mark.share = if share.is_finite() { share } else { 0.0 };
+    }
     let view_box = if window == b.view_box {
         b.doc_view_box
     } else {
@@ -613,6 +636,9 @@ struct PlacedLayer {
 struct Placed {
     marks: Vec<(EntityId, Rect, bool)>,
     layers: Vec<PlacedLayer>,
+    /// Whether a top-level INSERT reaches the entity in either state --
+    /// when none drew it, the change is drawn nowhere, not out of reach.
+    reached: bool,
 }
 
 /// A change to an entity inside a block definition, shown where every
@@ -656,6 +682,7 @@ fn placements(
             })
             .collect()
     };
+    let reached = b.is_some() || a.is_some();
     let (b_extents, a_extents) = (extents(&b), extents(&a));
     let references: BTreeSet<EntityId> =
         b_extents.keys().chain(a_extents.keys()).copied().collect();
@@ -695,7 +722,11 @@ fn placements(
             removed: true,
         });
     }
-    Placed { marks, layers }
+    Placed {
+        marks,
+        layers,
+        reached,
+    }
 }
 
 /// `db` reduced to what reaches entity `id` inside a block definition, or

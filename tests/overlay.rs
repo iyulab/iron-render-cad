@@ -418,8 +418,9 @@ fn a_removal_inside_a_block_is_drawn_dashed_where_it_was() {
     assert!(layer.contains("<g class=\"removed\""), "{layer}");
 }
 
-/// Every mark says how large its cloud is in the picture: the cloud's
-/// longer side, its margin of ten strokes included, over the picture's.
+/// Every mark says how large its change is in the picture: the longer side
+/// of the box its cloud is drawn around, before the margin, over the
+/// picture's.
 /// Framing the changes makes the same mark a larger share.
 #[test]
 fn a_mark_says_how_large_its_cloud_is_in_the_picture() {
@@ -434,9 +435,8 @@ fn a_mark_says_how_large_its_cloud_is_in_the_picture() {
         panic!("{:?}", whole.marked)
     };
     let longer = |w: f64, h: f64| w.max(h);
-    let m = whole.stroke_width * 10.0;
     let c = mark.cloud;
-    let expected = longer(c.max_x - c.min_x + 2.0 * m, c.max_y - c.min_y + 2.0 * m)
+    let expected = longer(c.max_x - c.min_x, c.max_y - c.min_y)
         / longer(whole.view_box.width(), whole.view_box.height());
     assert!(
         (mark.share - expected).abs() < 1e-12,

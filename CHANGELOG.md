@@ -10,7 +10,7 @@ bumps the minor version.
 ### Added
 
 - An overlay marks a change to an entity inside a block definition where every top-level INSERT places it, directly or through other blocks: one mark per reference, carrying the reference in the new `Mark::via`, with the entity alone drawn and clouded there. Such a change was reported as `NOT_TOP_LEVEL` and not drawn; that reason now remains only for a block no top-level INSERT reaches.
-- `Mark::share`: how large a mark's cloud is in the picture -- its longer side, margin included, over the picture's. A caller that knows the picture's size in pixels can tell a mark too small to see and frame the changes instead.
+- `Mark::share`: how large a mark's change is in the picture -- the longer side of the box its cloud is drawn around, before the margin, over the picture's. A caller that knows the picture's size in pixels can tell a mark too small to see and frame the changes instead.
 - A change inside a block that a top-level INSERT reaches but that is drawn in neither state is reported as `NOTHING_DRAWN`, not `NOT_TOP_LEVEL`.
 
 ### Fixed

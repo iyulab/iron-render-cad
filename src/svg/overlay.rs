@@ -107,11 +107,14 @@ pub struct Mark {
     /// where that reference puts it. Empty for a top-level entity.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub via: Vec<EntityId>,
-    /// How large the drawn cloud is in the picture: its longer side, margin
-    /// included, over the longer side of [`OverlayResult::view_box`]. A
-    /// picture `n` pixels across draws the cloud about `share * n` pixels
-    /// long -- a caller that knows its size can tell a mark too small to
-    /// see, and frame the changes instead ([`OverlayFrame::Changes`]).
+    /// How large the change is in the picture: the longer side of
+    /// [`Mark::cloud`] -- the box the cloud is drawn around, before its
+    /// margin -- over the longer side of [`OverlayResult::view_box`]. A
+    /// picture `n` pixels across shows the change about `share * n` pixels
+    /// long -- a caller that knows its size can tell a change too small to
+    /// find, and frame the changes instead ([`OverlayFrame::Changes`]). The
+    /// cloud's margin is left out: it is a few strokes wide whatever the
+    /// change, and would make every change look findable.
     pub share: f64,
 }
 
@@ -424,9 +427,8 @@ pub fn overlay_to_svg(
         }
     };
     let longer = |r: &Rect| r.width().max(r.height());
-    let margin = cloud_margin(stroke_width);
     for mark in &mut marked {
-        let share = longer(&pad(mark.cloud, margin)) / longer(&window);
+        let share = longer(&mark.cloud) / longer(&window);
         mark.share = if share.is_finite() { share } else { 0.0 };
     }
     let view_box = if window == b.view_box {

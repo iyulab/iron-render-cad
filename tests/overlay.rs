@@ -294,6 +294,130 @@ fn every_kind_of_change_is_marked_or_reported() {
     assert_eq!(layer.matches("class=\"cloud\"").count(), 3);
 }
 
+fn g2_json() -> Value {
+    serde_json::from_str(include_str!("golden/g2.expected.json"))
+        .expect("the golden model deserializes")
+}
+
+/// The line three blocks deep in the second golden case (INSERT 269 of `A`
+/// → `B` → `C` → LINE 261), lengthened.
+fn g2_with_longer_line(v: &mut Value) {
+    edit(v, 261, &|e| {
+        e["end_point"]["x"] = (e["end_point"]["x"].as_f64().unwrap() + 5.0).into()
+    });
+}
+
+/// A change to an entity inside a block definition is marked where the
+/// top-level reference places it: the cloud is around that entity alone,
+/// and the change layer draws it as it became -- not the whole reference.
+#[test]
+fn a_change_inside_a_block_is_marked_where_its_reference_places_it() {
+    let before_json = g2_json();
+    let mut after_json = before_json.clone();
+    g2_with_longer_line(&mut after_json);
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, by_reference());
+    assert_eq!(changes.changes.len(), 1, "{:?}", changes.changes);
+    let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+
+    assert!(overlay.not_marked.is_empty(), "{:?}", overlay.not_marked);
+    let [mark] = overlay.marked.as_slice() else {
+        panic!("one mark expected: {:?}", overlay.marked)
+    };
+    assert_eq!(mark.kind, MarkKind::Modified);
+    assert_eq!(mark.before, Some(EntityId::new(261)));
+    assert_eq!(mark.after, Some(EntityId::new(261)));
+    assert_eq!(mark.via, vec![EntityId::new(269)]);
+
+    // The cloud is the line where the reference puts it, both states: C's
+    // (0,0)-(10,0), turned a quarter and moved 5 by B, doubled by A, moved
+    // to (100,100) -- (110,100)-(110,120), and to (110,130) once longer.
+    let c = mark.cloud;
+    assert!(
+        (c.min_x - 110.0).abs() < 1e-9 && (c.max_x - 110.0).abs() < 1e-9,
+        "{c:?}"
+    );
+    assert!(
+        (c.min_y - 100.0).abs() < 1e-9 && (c.max_y - 130.0).abs() < 1e-9,
+        "{c:?}"
+    );
+
+    let layer = &overlay.svg[overlay.svg.find("<g id=\"changes\">").unwrap()..];
+    assert_eq!(layer.matches("class=\"cloud\"").count(), 1);
+    assert_eq!(layer.matches("<line").count(), 1, "the line, once: {layer}");
+    let report = serde_json::to_value(mark).unwrap();
+    assert_eq!(report["via"], serde_json::json!([269]), "{report}");
+}
+
+/// A block placed twice: one change, a mark at each place, each through
+/// its own reference.
+#[test]
+fn a_change_inside_a_block_placed_twice_is_marked_at_both_places() {
+    let mut before_json = g2_json();
+    // A second reference to `A`, 300 to the right.
+    let mut second = before_json["entities"][0].clone();
+    second["common"]["id"] = 9001.into();
+    second["insertion_point"]["x"] = 400.0.into();
+    before_json["entities"]
+        .as_array_mut()
+        .unwrap()
+        .push(second.clone());
+    before_json["tables"]["block_records"]["*Model_Space"]["entities"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    let mut after_json = before_json.clone();
+    g2_with_longer_line(&mut after_json);
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, by_reference());
+    let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+
+    assert!(overlay.not_marked.is_empty(), "{:?}", overlay.not_marked);
+    let mut via: Vec<Vec<EntityId>> = overlay.marked.iter().map(|m| m.via.clone()).collect();
+    via.sort();
+    assert_eq!(
+        via,
+        vec![vec![EntityId::new(269)], vec![EntityId::new(9001)]]
+    );
+    assert!(overlay.marked.iter().all(|m| m.entry == 0));
+    let [a, b] = overlay.marked.as_slice() else {
+        unreachable!()
+    };
+    assert!(
+        (a.cloud.min_x - b.cloud.min_x).abs() > 299.0,
+        "300 apart: {:?} {:?}",
+        a.cloud,
+        b.cloud
+    );
+    let layer = &overlay.svg[overlay.svg.find("<g id=\"changes\">").unwrap()..];
+    assert_eq!(layer.matches("class=\"cloud\"").count(), 2);
+    assert_eq!(layer.matches("<line").count(), 2, "{layer}");
+}
+
+/// A line removed from inside a block is drawn dashed where the reference
+/// placed it.
+#[test]
+fn a_removal_inside_a_block_is_drawn_dashed_where_it_was() {
+    let before_json = g2_json();
+    let mut after_json = before_json.clone();
+    remove(&mut after_json, 261);
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, by_reference());
+    let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+
+    let [mark] = overlay.marked.as_slice() else {
+        panic!(
+            "one mark expected: {:?} {:?}",
+            overlay.marked, overlay.not_marked
+        )
+    };
+    assert_eq!(mark.kind, MarkKind::Removed);
+    assert_eq!(mark.after, None);
+    assert_eq!(mark.via, vec![EntityId::new(269)]);
+    let layer = &overlay.svg[overlay.svg.find("<g id=\"changes\">").unwrap()..];
+    assert!(layer.contains("<g class=\"removed\""), "{layer}");
+}
+
 #[test]
 fn a_change_the_render_draws_nothing_for_is_reported() {
     let before = model(&g1_json());

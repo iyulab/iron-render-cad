@@ -7,6 +7,10 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- An overlay marks a change to an entity inside a block definition where every top-level INSERT places it, directly or through other blocks: one mark per reference, carrying the reference in the new `Mark::via`, with the entity alone drawn and clouded there. Such a change was reported as `NOT_TOP_LEVEL` and not drawn; that reason now remains only for a block no top-level INSERT reaches.
+
 ### Fixed
 
 - An overlay no longer draws a changed DIMENSION or ACAD_TABLE from the block the file made for its old record. When a change edits the record itself (any field outside `common`), the block still shows the old values, and drawing it in the proposal colour presented them as the change. Such a change is now clouded only, and its mark carries `not_drawn: BLOCK_OUT_OF_DATE` (new `Mark::not_drawn` and `NotDrawnReason`). A change to `common` fields only is drawn as before.

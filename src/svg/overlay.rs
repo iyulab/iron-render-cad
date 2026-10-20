@@ -8,7 +8,7 @@
 //! whose counterpart is uncertain gets a cloud and no geometry, and a change
 //! the picture cannot show is reported by name rather than dropped.
 
-use super::crop::LeftOut;
+use super::crop::{Crop, LeftOut};
 use super::format::clean;
 use super::scene::{doc_view_box, origin_attribute, page, root_stroke, Rect, Scene};
 use super::ToSvgOptions;
@@ -16,7 +16,7 @@ use iron_diff_cad::{Change, ChangeSet};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use uncad_model::model::{EntityId, Point2D};
+use uncad_model::model::{Entity, EntityId, Point2D};
 use uncad_model::CadDatabase;
 
 /// The proposal colour [`OverlayOptions`] uses when none is given: red, as
@@ -100,6 +100,13 @@ pub struct Mark {
     /// when it is drawn, and for the kinds that draw no second state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub not_drawn: Option<NotDrawnReason>,
+    /// For a change to an entity inside a block definition: the top-level
+    /// block reference this mark shows it through. Every reference that
+    /// places the block, directly or through other blocks, gets a mark of
+    /// its own with the same [`Mark::entry`]; the cloud is around the entity
+    /// where that reference puts it. Empty for a top-level entity.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub via: Vec<EntityId>,
 }
 
 /// Why a marked change's entity is not drawn from the second state.
@@ -138,9 +145,12 @@ fn block_out_of_date(change: &Change) -> bool {
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[non_exhaustive]
 pub enum NotMarkedReason {
-    /// The entity is not a top-level entity of the rendered space: it sits
-    /// inside a block definition, where every reference to the block places
-    /// it somewhere else, or in a space the render did not draw.
+    /// The entity is not a top-level entity of the rendered space, and no
+    /// top-level block reference of that space places it: it sits in a
+    /// block nothing in the space references (or only a DIMENSION or a
+    /// table does), or in a space the render did not draw. An entity in a
+    /// block that a top-level INSERT places is marked through it
+    /// ([`Mark::via`]).
     NotTopLevel,
     /// The render drew nothing for the entity in either state, so there is
     /// nothing to put a cloud around: a type this renderer does not draw,
@@ -227,6 +237,13 @@ pub struct OverlayResult {
 /// | `REMOVED` | the entity, from `before`, dashed, and a cloud |
 /// | `UNKNOWN` | a dashed cloud around the entity and all its candidates -- no geometry, since which candidate it became is not known |
 ///
+/// A change to an entity inside a block definition is shown where every
+/// top-level INSERT places it, directly or through other blocks: one mark
+/// per reference ([`Mark::via`]), with the entity alone drawn and clouded
+/// there. A block only a DIMENSION or a table references, or none, leaves
+/// the change in [`OverlayResult::not_marked`] as
+/// [`NotMarkedReason::NotTopLevel`].
+///
 /// The change layer draws lines and text only: fills (solids, hatches) are
 /// drawn as outlines. Every change is either in [`OverlayResult::marked`]
 /// or in [`OverlayResult::not_marked`] with the reason, never silently
@@ -249,6 +266,9 @@ pub fn overlay_to_svg(
     let mut drawn_after = BTreeSet::new();
     let mut drawn_before = BTreeSet::new();
     let mut clouds: Vec<(Rect, bool)> = Vec::new();
+    // Changes inside block definitions, drawn where each reference places
+    // them: the renders of the reduced states, and which parts to draw.
+    let mut placed_layers: Vec<PlacedLayer> = Vec::new();
 
     for (entry, change) in changes.changes.iter().enumerate() {
         let (kind, before_id, after_ids): (MarkKind, Option<EntityId>, Vec<EntityId>) = match change
@@ -268,6 +288,29 @@ pub fn overlay_to_svg(
             .filter_map(|id| a_parts.get(id).copied())
             .collect();
         if before_part.is_none() && after_parts.is_empty() {
+            let after_id = after_ids.first().copied();
+            let placed = placements(
+                kind,
+                before_id.map(|id| (before, id)),
+                after_id.map(|id| (after, id)),
+                options.svg,
+            );
+            if !placed.marks.is_empty() {
+                for (via, cloud, drawn) in placed.marks {
+                    clouds.push((cloud, false));
+                    marked.push(Mark {
+                        entry,
+                        kind,
+                        before: before_id.filter(|_| kind != MarkKind::Added),
+                        after: after_id.filter(|_| drawn),
+                        cloud,
+                        not_drawn: None,
+                        via: vec![via],
+                    });
+                }
+                placed_layers.extend(placed.layers);
+                continue;
+            }
             not_marked.push(NotMarked {
                 entry,
                 kind,
@@ -324,6 +367,7 @@ pub fn overlay_to_svg(
             after,
             cloud,
             not_drawn,
+            via: Vec::new(),
         });
     }
 
@@ -385,6 +429,23 @@ pub fn overlay_to_svg(
     if !drawn_before.is_empty() {
         let body = b.layer(view_box, stroke_width, |i| drawn_before.contains(&i));
         let _ = write!(layer, "\n  <g class=\"removed\">\n  {body}\n  </g>");
+    }
+    for placed in &placed_layers {
+        let scene = &placed.scene;
+        let body = scene.layer(doc_view_box(&window, scene.origin), stroke_width, |i| {
+            placed.parts.contains(&i)
+        });
+        let dx = clean(scene.origin.x - b.origin.x);
+        let dy = clean(b.origin.y - scene.origin.y);
+        let class = if placed.removed {
+            " class=\"removed\""
+        } else {
+            ""
+        };
+        let _ = write!(
+            layer,
+            "\n  <g{class} transform=\"translate({dx} {dy})\">\n  {body}\n  </g>"
+        );
     }
     for (rect, dashed) in &clouds {
         let class = if *dashed { "cloud unknown" } else { "cloud" };
@@ -536,6 +597,180 @@ const MAX_ARCS_PER_SIDE: usize = 100;
 
 fn cloud_margin(stroke_width: f64) -> f64 {
     stroke_width * MARGIN
+}
+
+/// One reduced state's render, and the parts of it the change layer draws.
+struct PlacedLayer {
+    scene: Scene,
+    parts: BTreeSet<usize>,
+    /// Drawn dashed: the first state of a removed entity.
+    removed: bool,
+}
+
+/// What [`placements`] found: a mark per top-level reference (the
+/// reference, the cloud, whether the second state is drawn there) and the
+/// layers that draw them.
+struct Placed {
+    marks: Vec<(EntityId, Rect, bool)>,
+    layers: Vec<PlacedLayer>,
+}
+
+/// A change to an entity inside a block definition, shown where every
+/// top-level INSERT places it.
+///
+/// Each state is reduced to what reaches the entity -- the top-level
+/// INSERTs whose block holds it directly or through other blocks, and in
+/// each such block only the entity and the INSERTs that lead to it -- and
+/// rendered as [`crate::to_svg`] would, with no crop. A part of that render
+/// is one top-level INSERT drawing the entity alone, at every place the
+/// reference puts it.
+fn placements(
+    kind: MarkKind,
+    before: Option<(&CadDatabase, EntityId)>,
+    after: Option<(&CadDatabase, EntityId)>,
+    options: ToSvgOptions,
+) -> Placed {
+    let options = ToSvgOptions {
+        crop: Crop::Everything,
+        ..options
+    };
+    let scene = |state: Option<(&CadDatabase, EntityId)>| {
+        state
+            .and_then(|(db, id)| reduced_to(db, id))
+            .map(|db| Scene::new(&db, options))
+    };
+    let (b, a) = match kind {
+        MarkKind::Added => (None, scene(after)),
+        MarkKind::Removed => (scene(before), None),
+        MarkKind::Modified => (scene(before), scene(after)),
+        MarkKind::Unknown => (None, None),
+    };
+    let extents = |scene: &Option<Scene>| -> BTreeMap<EntityId, (usize, Rect)> {
+        scene
+            .iter()
+            .flat_map(|s| {
+                top_level(s)
+                    .into_iter()
+                    .filter_map(|(id, i)| drawn_extent(s, i).map(|r| (id, (i, r))))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+    let (b_extents, a_extents) = (extents(&b), extents(&a));
+    let references: BTreeSet<EntityId> =
+        b_extents.keys().chain(a_extents.keys()).copied().collect();
+    let mut marks = Vec::new();
+    let (mut b_parts, mut a_parts) = (BTreeSet::new(), BTreeSet::new());
+    for reference in references {
+        let before = b_extents.get(&reference);
+        let after = a_extents.get(&reference);
+        let Some(cloud) = before
+            .map(|x| x.1)
+            .into_iter()
+            .chain(after.map(|x| x.1))
+            .reduce(union)
+        else {
+            continue;
+        };
+        if let Some(&(i, _)) = after {
+            a_parts.insert(i);
+        }
+        if let (MarkKind::Removed, Some(&(i, _))) = (kind, before) {
+            b_parts.insert(i);
+        }
+        marks.push((reference, cloud, after.is_some()));
+    }
+    let mut layers = Vec::new();
+    if let Some(scene) = a.filter(|_| !a_parts.is_empty()) {
+        layers.push(PlacedLayer {
+            scene,
+            parts: a_parts,
+            removed: false,
+        });
+    }
+    if let Some(scene) = b.filter(|_| !b_parts.is_empty()) {
+        layers.push(PlacedLayer {
+            scene,
+            parts: b_parts,
+            removed: true,
+        });
+    }
+    Placed { marks, layers }
+}
+
+/// `db` reduced to what reaches entity `id` inside a block definition, or
+/// `None` when `id` is top-level or no top-level INSERT reaches it.
+fn reduced_to(db: &CadDatabase, id: EntityId) -> Option<CadDatabase> {
+    if db.entities.iter().any(|e| e.common().id == id) {
+        return None;
+    }
+    let blocks = &db.tables.block_records;
+    let holds = |name: &str| {
+        blocks
+            .get(name)
+            .is_some_and(|b| b.entities.iter().any(|e| e.common().id == id))
+    };
+    // The blocks that place the entity: holding it, or holding an INSERT of
+    // a block that does -- grown until nothing more joins.
+    let mut reaching: BTreeSet<&str> = blocks
+        .keys()
+        .map(String::as_str)
+        .filter(|name| !is_space(name) && holds(name))
+        .collect();
+    if reaching.is_empty() {
+        return None;
+    }
+    loop {
+        let more: Vec<&str> = blocks
+            .iter()
+            .filter(|(name, _)| !is_space(name) && !reaching.contains(name.as_str()))
+            .filter(|(_, b)| b.entities.iter().any(|e| inserts_one_of(e, &reaching)))
+            .map(|(name, _)| name.as_str())
+            .collect();
+        if more.is_empty() {
+            break;
+        }
+        reaching.extend(more);
+    }
+    let mut out = db.clone();
+    out.entities.retain(|e| inserts_one_of(e, &reaching));
+    if out.entities.is_empty() {
+        return None;
+    }
+    for (name, block) in out.tables.block_records.iter_mut() {
+        if !reaching.contains(name.as_str()) {
+            continue;
+        }
+        block
+            .entities
+            .retain(|e| e.common().id == id || inserts_one_of(e, &reaching));
+        // A nested INSERT's attribute values are drawn beside it; they are
+        // not the entity.
+        for e in block.entities.iter_mut() {
+            if let Entity::Insert(i) = e {
+                i.attribs.clear();
+            }
+        }
+    }
+    Some(out)
+}
+
+/// Whether `e` is an INSERT of one of `blocks`.
+fn inserts_one_of(e: &Entity, blocks: &BTreeSet<&str>) -> bool {
+    match e {
+        Entity::Insert(i) => i
+            .block_name
+            .resolved()
+            .is_some_and(|n| blocks.contains(n.as_str())),
+        _ => false,
+    }
+}
+
+/// A space's own block record (`*Model_Space`, `*Paper_Space…`): its
+/// entities are top-level, not a definition placed by reference.
+fn is_space(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("*model_space") || n.starts_with("*paper_space")
 }
 
 /// Every top-level part of `scene` by its entity's reference ID. A layout's

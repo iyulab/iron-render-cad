@@ -7,6 +7,10 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Fixed
+
+- An overlay no longer draws a changed DIMENSION or ACAD_TABLE from the block the file made for its old record. When a change edits the record itself (any field outside `common`), the block still shows the old values, and drawing it in the proposal colour presented them as the change. Such a change is now clouded only, and its mark carries `not_drawn: BLOCK_OUT_OF_DATE` (new `Mark::not_drawn` and `NotDrawnReason`). A change to `common` fields only is drawn as before.
+
 ## [0.10.0] - 2026-10-07
 
 ### Changed

@@ -10,8 +10,8 @@
 
 use iron_diff_cad::{diff, Change, DiffOptions};
 use iron_render_cad::{
-    overlay_to_svg, svg_to_png, to_svg, MarkKind, NotMarkedReason, OverlayOptions, ToSvgOptions,
-    CONFLICT_DELTA_E,
+    overlay_to_svg, svg_to_png, to_svg, MarkKind, NotDrawnReason, NotMarkedReason, OverlayOptions,
+    ToSvgOptions, CONFLICT_DELTA_E,
 };
 use serde_json::Value;
 use uncad_model::model::EntityId;
@@ -168,6 +168,64 @@ fn a_smaller_hole_is_drawn_as_it_became_with_a_cloud_around_both() {
     assert!(changes_layer.contains("<circle"), "the new hole is drawn");
     assert!(changes_layer.contains(" r=\"4\""), "at its new radius");
     assert_eq!(changes_layer.matches("class=\"cloud\"").count(), 1);
+}
+
+/// A dimension is drawn from the block the file made for it. A change to
+/// its record -- here the text a diameter dimension shows -- leaves that
+/// block showing the old text, so the change is clouded and the old block
+/// is not drawn as if it were the new state.
+#[test]
+fn a_dimension_whose_record_changed_is_clouded_not_drawn_from_its_old_block() {
+    let before_json = g1_json();
+    let mut after_json = before_json.clone();
+    edit(&mut after_json, 296, &|e| {
+        e["text_override"] = serde_json::json!({"type": "LITERAL", "data": "%%C12"});
+    });
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, by_reference());
+    let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+
+    assert!(overlay.not_marked.is_empty(), "{:?}", overlay.not_marked);
+    let [mark] = overlay.marked.as_slice() else {
+        panic!("one mark expected: {:?}", overlay.marked)
+    };
+    assert_eq!(mark.kind, MarkKind::Modified);
+    assert_eq!(mark.before, Some(EntityId::new(296)));
+    assert_eq!(mark.after, None);
+    assert_eq!(mark.not_drawn, Some(NotDrawnReason::BlockOutOfDate));
+
+    let changes_layer = &overlay.svg[overlay.svg.find("<g id=\"changes\">").unwrap()..];
+    assert_eq!(changes_layer.matches("class=\"cloud\"").count(), 1);
+    assert!(
+        !changes_layer.contains("<text") && !changes_layer.contains("<line"),
+        "nothing of the old block is drawn as the change: {changes_layer}"
+    );
+    let report = serde_json::to_value(mark).unwrap();
+    assert_eq!(report["not_drawn"], "BLOCK_OUT_OF_DATE", "{report}");
+}
+
+/// A change to a dimension's own `common` fields is one its block shows --
+/// the block's children take them by layer 0 and by block -- so it is drawn.
+#[test]
+fn a_dimension_whose_colour_changed_is_still_drawn() {
+    let before_json = g1_json();
+    let mut after_json = before_json.clone();
+    edit(&mut after_json, 296, &|e| {
+        e["common"]["color_index"] = 1.into()
+    });
+    let (before, after) = (model(&before_json), model(&after_json));
+    let changes = diff(&before, &after, by_reference());
+    let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+
+    let [mark] = overlay.marked.as_slice() else {
+        panic!("one mark expected: {:?}", overlay.marked)
+    };
+    assert_eq!(mark.after, Some(EntityId::new(296)));
+    assert_eq!(mark.not_drawn, None);
+    let report = serde_json::to_value(mark).unwrap();
+    assert!(report.get("not_drawn").is_none(), "{report}");
+    let changes_layer = &overlay.svg[overlay.svg.find("<g id=\"changes\">").unwrap()..];
+    assert!(changes_layer.contains("<text"), "the dimension is drawn");
 }
 
 #[test]

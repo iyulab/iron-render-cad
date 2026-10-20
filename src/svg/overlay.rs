@@ -95,6 +95,42 @@ pub struct Mark {
     /// extent the change involves (both states of a modified entity, all
     /// candidates of an unknown one), before the cloud's margin.
     pub cloud: Rect,
+    /// Why the entity is not drawn from the second state although the
+    /// change has it there: the cloud is drawn, the entity is not. `None`
+    /// when it is drawn, and for the kinds that draw no second state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_drawn: Option<NotDrawnReason>,
+}
+
+/// Why a marked change's entity is not drawn from the second state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[non_exhaustive]
+pub enum NotDrawnReason {
+    /// The entity is drawn from a block the file made for its record -- a
+    /// DIMENSION's or an ACAD_TABLE's -- and the change edits the record
+    /// itself (any field outside `common`): a measurement, a text, a point,
+    /// a style, a cell. The block still shows the record as it was, so
+    /// drawing it would present the old values as the change.
+    BlockOutOfDate,
+}
+
+/// The entity types drawn from a block the file made for the record, which
+/// an edit of the record does not redraw.
+const DRAWN_FROM_OWN_BLOCK: [&str; 2] = ["DIMENSION", "ACAD_TABLE"];
+
+/// Whether `change` edits a record whose drawing is a block made for it, so
+/// that block no longer shows the second state. The entity's own `common`
+/// fields (layer, colour, linetype) are the block's too: its children take
+/// them by layer 0 and by block.
+fn block_out_of_date(change: &Change) -> bool {
+    match change {
+        Change::Modified(m) => {
+            DRAWN_FROM_OWN_BLOCK.contains(&m.entity_type.as_str())
+                && m.fields.iter().any(|f| !f.path.starts_with("common."))
+        }
+        _ => false,
+    }
 }
 
 /// Why a change is not in the picture.
@@ -187,7 +223,7 @@ pub struct OverlayResult {
 /// | Change | Drawn |
 /// |---|---|
 /// | `ADDED` | the entity, from `after`, and a revision cloud |
-/// | `MODIFIED` | the entity as it is in `after`, and a cloud around both states |
+/// | `MODIFIED` | the entity as it is in `after`, and a cloud around both states -- except a DIMENSION or an ACAD_TABLE whose record the change edits: its block still draws the old record, so only the cloud is drawn ([`NotDrawnReason::BlockOutOfDate`]) |
 /// | `REMOVED` | the entity, from `before`, dashed, and a cloud |
 /// | `UNKNOWN` | a dashed cloud around the entity and all its candidates -- no geometry, since which candidate it became is not known |
 ///
@@ -261,11 +297,16 @@ pub fn overlay_to_svg(
         };
 
         let mut after = None;
+        let mut not_drawn = None;
         match kind {
             MarkKind::Added | MarkKind::Modified => {
                 if let Some(&(i, _)) = after_extents.first() {
-                    drawn_after.insert(i);
-                    after = Some(a.parts[i].id);
+                    if block_out_of_date(change) {
+                        not_drawn = Some(NotDrawnReason::BlockOutOfDate);
+                    } else {
+                        drawn_after.insert(i);
+                        after = Some(a.parts[i].id);
+                    }
                 }
             }
             MarkKind::Removed => {
@@ -282,6 +323,7 @@ pub fn overlay_to_svg(
             before: before_id.filter(|_| before_part.is_some()),
             after,
             cloud,
+            not_drawn,
         });
     }
 

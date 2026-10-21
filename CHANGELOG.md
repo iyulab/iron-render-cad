@@ -16,6 +16,7 @@ bumps the minor version.
 
 ### Fixed
 
+- A layout without usable limits whose plot settings give the paper in pixels, or in no stated unit, is no longer sized as if the paper were in millimetres. The paper's size is stored in millimetres, but a pixel paper has no length in the layout's units without the raster device's resolution, and a layout that states no unit does not say what its millimetres are; such a sheet is now framed on its paper entities (`sheet: None`), as one that states no paper.
 - An overlay no longer draws a changed DIMENSION or ACAD_TABLE from the block the file made for its old record. When a change edits the record itself (any field outside `common`), the block still shows the old values, and drawing it in the proposal colour presented them as the change. Such a change is now clouded only, and its mark carries `not_drawn: BLOCK_OUT_OF_DATE` (new `Mark::not_drawn` and `NotDrawnReason`). A change to `common` fields only is drawn as before.
 
 ## [0.10.0] - 2026-10-07

@@ -402,7 +402,8 @@ fn model_to_paper(vp: &ViewportEntity, view: &ViewportView) -> Affine2 {
 /// with the printable area's lower-left corner moved by the plot origin at
 /// the layout's origin (the rule ezdxf's `reset_paper_limits` applies). The
 /// settings are in millimetres; a layout drawn in inches has them divided
-/// by 25.4. `None` when the layout states neither -- or states one no
+/// by 25.4, and one in pixels -- or one that states no paper unit -- has
+/// no paper from them. `None` when the layout states neither -- or states one no
 /// drawing can mean, a number past [`MAX_WORLD_COORDINATE`] (a corrupt
 /// header), which would otherwise size the picture the way the extent of
 /// the model space is kept from doing.
@@ -429,10 +430,14 @@ fn sheet(layout: &LayoutRecord) -> Option<(Box2D, SheetSource)> {
         }
         _ => (p.paper_width, p.paper_height),
     };
-    let per_mm = if p.paper_units == Some(PlotPaperUnits::Inches) {
-        1.0 / 25.4
-    } else {
-        1.0
+    let per_mm = match p.paper_units {
+        Some(PlotPaperUnits::Millimeters) => 1.0,
+        Some(PlotPaperUnits::Inches) => 1.0 / 25.4,
+        // A paper in pixels has no length in the layout's units without the
+        // raster device's resolution, which the file does not carry; and a
+        // layout that states no unit does not say what its millimetres are
+        // to the layout either. Neither is guessed.
+        Some(PlotPaperUnits::Pixels) | None => return None,
     };
     let finite = |v: f64| if sane(v) { v } else { 0.0 };
     let shift = Point2D {
@@ -553,6 +558,23 @@ mod tests {
         );
         // No paper either: no sheet.
         assert!(sheet(&layout(none, plot((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)))).is_none());
+    }
+
+    #[test]
+    fn a_paper_in_pixels_or_in_no_stated_unit_is_not_a_sheet() {
+        let none = (p(0.0, 0.0), p(0.0, 0.0));
+        let mut pixels = plot((1600.0, 1280.0), (0.0, 0.0), (0.0, 0.0));
+        pixels.paper_units = Some(PlotPaperUnits::Pixels);
+        assert!(sheet(&layout(none, pixels.clone())).is_none());
+        let mut unstated = plot((297.0, 210.0), (0.0, 0.0), (0.0, 0.0));
+        unstated.paper_units = None;
+        assert!(sheet(&layout(none, unstated)).is_none());
+        // Limits are the paper's placement whatever its unit.
+        let limits = (p(0.0, 0.0), p(1600.0, 1280.0));
+        assert_eq!(
+            sheet(&layout(limits, pixels)).unwrap().1,
+            SheetSource::Limits
+        );
     }
 
     fn viewport(id: Option<i32>, view: Option<ViewportView>) -> ViewportEntity {

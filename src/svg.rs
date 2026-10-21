@@ -235,8 +235,9 @@ pub struct ToSvgResult {
     /// each shows of the model. Always empty for [`to_svg`].
     pub viewports: Vec<ViewportReport>,
     /// For a layout's sheet: where the sheet the viewBox frames comes
-    /// from, or `None` when the layout states no sheet and is framed like
-    /// a render of its paper space. Always `None` for [`to_svg`].
+    /// from, or `None` when the layout states no sheet -- or states its
+    /// paper only in pixels or in no unit -- and is framed like a render of
+    /// its paper space. Always `None` for [`to_svg`].
     pub sheet: Option<SheetSource>,
 }
 

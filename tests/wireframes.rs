@@ -71,3 +71,31 @@ fn a_body_with_depth_still_gets_the_isometric_view() {
     let x = 10.0 * (std::f64::consts::PI / 6.0).cos();
     assert!(out.contains(&format!("x1=\"{x}\" y1=\"-15\"")), "{out}");
 }
+
+#[test]
+fn a_solid_with_no_edge_is_reported_by_id_not_as_an_unsupported_type() {
+    // A whole torus is one face that closes on itself: a body read in full
+    // with no edge to draw. Beside it, a solid that has edges is drawn.
+    let mut db = region(vec![[p3(0.0, 0.0, 0.0), p3(10.0, 0.0, 0.0)]]);
+    db.entities.push(Entity::Solid3D(Solid3DEntity {
+        common: common::common_on(0x20, "0", 7),
+        wireframe_edges: vec![],
+        skipped_edges: 0,
+    }));
+    db.entities.push(Entity::Solid3D(Solid3DEntity {
+        common: common::common_on(0x30, "0", 7),
+        wireframe_edges: vec![[p3(0.0, 5.0, 0.0), p3(10.0, 5.0, 0.0)]],
+        skipped_edges: 0,
+    }));
+    let r = to_svg(
+        &db,
+        ToSvgOptions {
+            space: Space::All,
+            ..ToSvgOptions::default()
+        },
+    );
+    assert!(r.unsupported_types.is_empty(), "{:?}", r.unsupported_types);
+    let ids: Vec<u64> = r.edgeless.iter().map(|id| id.value()).collect();
+    assert_eq!(ids, vec![0x20]);
+    assert_eq!(r.svg.matches("<line").count(), 2, "{}", r.svg);
+}

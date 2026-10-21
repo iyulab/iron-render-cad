@@ -174,6 +174,14 @@ pub struct ToSvgResult {
     /// ([`ArcEntity::sweep`](uncad_model::model::ArcEntity::sweep)). By
     /// reference ID, sorted, each once. Never part of the extent.
     pub undefined_arcs: Vec<EntityId>,
+    /// The wireframe entities -- 3DSOLIDs, REGIONs, polyface and polygon
+    /// meshes -- not drawn because they have no edge to draw: a body whose
+    /// faces close without one (a whole sphere or torus), an empty one, a
+    /// mesh of no faces, or a body whose every edge the reader could not
+    /// make a chord of (its `skipped_edges` says how many). The type is
+    /// drawn; these entities have nothing to draw. By reference ID, sorted,
+    /// each once. Never part of the extent.
+    pub edgeless: Vec<EntityId>,
     /// The LEADERs and MULTILEADERs whose lines are not drawn because the
     /// file does not define the curve: a spline path, which the program that
     /// draws it fits through the points, or a path whose kind the model does
@@ -330,6 +338,8 @@ struct Ctx<'a> {
     /// ARCs left out because their two angles are equal (see
     /// `ToSvgResult::undefined_arcs`).
     undefined_arcs: BTreeSet<EntityId>,
+    /// Wireframe entities with no edge to draw (see `ToSvgResult::edgeless`).
+    edgeless: BTreeSet<EntityId>,
     /// Leaders left out because the file does not define their curve (see
     /// `ToSvgResult::undefined_leaders`).
     undefined_leaders: BTreeSet<EntityId>,
@@ -446,6 +456,7 @@ impl<'a> Ctx<'a> {
             empty_blocks: self.empty_blocks.into_iter().collect(),
             unresolved_block_refs: self.unresolved_block_refs.into_iter().collect(),
             undefined_arcs: self.undefined_arcs.into_iter().collect(),
+            edgeless: self.edgeless.into_iter().collect(),
             undefined_leaders: self.undefined_leaders.into_iter().collect(),
             unsized_arrowheads: self.unsized_arrowheads.into_iter().collect(),
             limits: self.limits,
@@ -469,6 +480,7 @@ impl<'a> Ctx<'a> {
             empty_blocks: BTreeSet::new(),
             unresolved_block_refs: BTreeSet::new(),
             undefined_arcs: BTreeSet::new(),
+            edgeless: BTreeSet::new(),
             undefined_leaders: BTreeSet::new(),
             unsized_arrowheads: BTreeSet::new(),
             tables,
@@ -2576,13 +2588,13 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider_all(&pts);
             Some(polyline_element(&pts, false, &color, frame))
         }
-        Entity::Solid3D(s) => render_wireframe_entity(&s.wireframe_edges, "3DSOLID", &color, ctx),
-        Entity::Region(r) => render_wireframe_entity(&r.wireframe_edges, "REGION", &color, ctx),
+        Entity::Solid3D(s) => render_wireframe_entity(&s.wireframe_edges, s.common.id, &color, ctx),
+        Entity::Region(r) => render_wireframe_entity(&r.wireframe_edges, r.common.id, &color, ctx),
         Entity::PolylinePFace(p) => {
-            render_wireframe_entity(&p.wireframe_edges, "POLYLINE_PFACE", &color, ctx)
+            render_wireframe_entity(&p.wireframe_edges, p.common.id, &color, ctx)
         }
         Entity::PolylineMesh(p) => {
-            render_wireframe_entity(&p.wireframe_edges, "POLYLINE_MESH", &color, ctx)
+            render_wireframe_entity(&p.wireframe_edges, p.common.id, &color, ctx)
         }
         // Everything a HATCH states -- boundary, pattern lines, gradient --
         // is in its own plane, so the whole fill stays exact.
@@ -2811,16 +2823,17 @@ fn within_world(b: &Box2D) -> bool {
         .all(|v| v.abs() < MAX_WORLD_COORDINATE)
 }
 
-/// Wireframe entities share one shape: draw the edges, or report the type as
-/// unsupported when extraction produced none.
+/// Wireframe entities share one shape: draw the edges, or report the entity
+/// as having none to draw -- the type is supported; an entity without edges
+/// (a whole sphere or torus, an empty body) has nothing to show as one.
 fn render_wireframe_entity(
     edges: &[[Point3D; 2]],
-    type_name: &str,
+    id: EntityId,
     color: &str,
     ctx: &mut Ctx,
 ) -> Option<String> {
     if edges.is_empty() {
-        ctx.unsupported.insert(type_name.to_string());
+        ctx.edgeless.insert(id);
         return None;
     }
     Some(wireframe_element(edges, color, ctx))
@@ -3231,6 +3244,7 @@ fn svg_result(scene: Scene, stroke_width: Option<f64>, screen_stroke: Option<f64
         empty_blocks: scene.empty_blocks,
         unresolved_block_refs: scene.unresolved_block_refs,
         undefined_arcs: scene.undefined_arcs,
+        edgeless: scene.edgeless,
         undefined_leaders: scene.undefined_leaders,
         unsized_arrowheads: scene.unsized_arrowheads,
         limits: scene.limits,

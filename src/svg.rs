@@ -111,6 +111,15 @@ pub struct ToSvgOptions {
     /// starts the document with a black rectangle covering its view and
     /// draws pure black white.
     pub paper: Paper,
+    /// Every stroke drawn this many CSS pixels wide on screen whatever the
+    /// zoom, the way a CAD viewer draws lines: the document carries a style
+    /// rule giving every element `vector-effect: non-scaling-stroke` and
+    /// this `stroke-width`. `None` (default), or a width that is not a
+    /// positive number, keeps [`stroke_width`](Self::stroke_width) in
+    /// drawing units, which a viewer scales with the picture. Only a
+    /// renderer that applies CSS draws the rule; [`svg_to_png`](crate::svg_to_png)
+    /// and [`Scene::png`](crate::Scene::png) take pixels of their own.
+    pub screen_stroke: Option<f64>,
 }
 
 /// [`ToSvgOptions::cap_height`]'s default, 0.7: sans-serif faces measure
@@ -129,6 +138,7 @@ impl Default for ToSvgOptions {
             cap_height: DEFAULT_CAP_HEIGHT,
             include_hidden: false,
             paper: Paper::Light,
+            screen_stroke: None,
         }
     }
 }
@@ -3145,7 +3155,11 @@ fn view_box_of(bounds: &Box2D, padding: f64, origin: Point2D) -> ViewBox {
 /// rather than a fixed value, and nested block references keep a constant
 /// visual weight whatever they are scaled by.
 pub fn to_svg(db: &CadDatabase, options: ToSvgOptions) -> ToSvgResult {
-    svg_result(render(db, options), options.stroke_width)
+    svg_result(
+        render(db, options),
+        options.stroke_width,
+        options.screen_stroke,
+    )
 }
 
 /// Renders the paper layout named `layout` (a key of `tables.layouts`) as
@@ -3175,15 +3189,41 @@ pub fn layout_to_svg(
     Ok(svg_result(
         sheet::render_layout(db, layout, options)?,
         options.stroke_width,
+        options.screen_stroke,
     ))
 }
 
+/// `svg` with a style rule, right after its root tag, drawing every stroke
+/// `px` CSS pixels wide whatever the zoom ([`ToSvgOptions::screen_stroke`]);
+/// `svg` as it is when `px` is not a positive number. A style sheet's
+/// `stroke-width` outranks the elements' own attributes, so the rule covers
+/// the widths written for scaled block references too; a text is drawn
+/// without a stroke and stays so.
+fn with_screen_stroke(svg: String, px: Option<f64>) -> String {
+    let Some(px) = px.filter(|p| p.is_finite() && *p > 0.0) else {
+        return svg;
+    };
+    let Some(end) = svg.find('>') else {
+        return svg;
+    };
+    let mut out = String::with_capacity(svg.len() + 80);
+    out.push_str(&svg[..=end]);
+    let _ = write!(
+        out,
+        "
+  <style>*{{vector-effect:non-scaling-stroke;stroke-width:{px}px}}</style>"
+    );
+    out.push_str(&svg[end + 1..]);
+    out
+}
+
 /// `scene`'s whole document at `stroke_width`, or at its own automatic
-/// width when none is given, with its reports.
-fn svg_result(scene: Scene, stroke_width: Option<f64>) -> ToSvgResult {
+/// width when none is given -- every stroke `screen_stroke` pixels wide on
+/// screen when that is given -- with its reports.
+fn svg_result(scene: Scene, stroke_width: Option<f64>, screen_stroke: Option<f64>) -> ToSvgResult {
     let stroke_width = stroke_width.unwrap_or(scene.auto_stroke_width);
     ToSvgResult {
-        svg: scene.document(stroke_width),
+        svg: with_screen_stroke(scene.document(stroke_width), screen_stroke),
         unsupported_types: scene.unsupported_types,
         empty_blocks: scene.empty_blocks,
         unresolved_block_refs: scene.unresolved_block_refs,

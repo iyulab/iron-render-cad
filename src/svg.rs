@@ -116,7 +116,9 @@ pub struct ToSvgOptions {
     /// rule giving every element `vector-effect: non-scaling-stroke` and
     /// this `stroke-width`. `None` (default), or a width that is not a
     /// positive number, keeps [`stroke_width`](Self::stroke_width) in
-    /// drawing units, which a viewer scales with the picture. Only a
+    /// drawing units, which a viewer scales with the picture. An overlay
+    /// ([`overlay_to_svg`](crate::overlay_to_svg)) carries the same rule;
+    /// what it reports (marks, stroke width in units) does not change. Only a
     /// renderer that applies CSS draws the rule; [`svg_to_png`](crate::svg_to_png)
     /// and [`Scene::png`](crate::Scene::png) take pixels of their own.
     pub screen_stroke: Option<f64>,

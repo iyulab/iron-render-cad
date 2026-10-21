@@ -4,7 +4,8 @@
 
 mod common;
 
-use iron_render_cad::{svg_to_png, to_svg, Space, ToSvgOptions};
+use iron_diff_cad::{diff, DiffOptions, Matching};
+use iron_render_cad::{overlay_to_svg, svg_to_png, to_svg, OverlayOptions, Space, ToSvgOptions};
 use uncad_model::model::{Entity, LineEntity, Point2D, Point3D, TextEntity};
 use uncad_model::{CadDatabase, ReadDiagnostics};
 
@@ -99,4 +100,51 @@ fn a_width_that_is_not_a_positive_number_writes_no_rule() {
     for px in [0.0, -1.0, f64::NAN, f64::INFINITY] {
         assert_eq!(with(Some(px)), plain, "{px}");
     }
+}
+
+#[test]
+fn an_overlay_takes_the_same_rule() {
+    let before = drawing();
+    let mut after = drawing();
+    let Entity::Line(l) = &mut after.entities[0] else {
+        unreachable!()
+    };
+    l.end_point.x = 300.0;
+    let changes = diff(
+        &before,
+        &after,
+        DiffOptions {
+            matching: Matching::Reference,
+            ..DiffOptions::default()
+        },
+    );
+    let overlay = |screen_stroke| {
+        overlay_to_svg(
+            &before,
+            &after,
+            &changes,
+            OverlayOptions {
+                svg: ToSvgOptions {
+                    screen_stroke,
+                    space: Space::All,
+                    ..ToSvgOptions::default()
+                },
+                ..OverlayOptions::default()
+            },
+        )
+    };
+    let plain = overlay(None);
+    let screen = overlay(Some(1.5));
+    assert!(!screen.marked.is_empty());
+    let root_end = plain.svg.find('>').unwrap() + 1;
+    assert_eq!(
+        screen.svg[root_end..].strip_prefix(&format!(
+            "
+  {RULE}"
+        )),
+        Some(&plain.svg[root_end..])
+    );
+    // What the overlay reports is about the drawing, not the screen.
+    assert_eq!(screen.marked, plain.marked);
+    assert_eq!(screen.stroke_width, plain.stroke_width);
 }

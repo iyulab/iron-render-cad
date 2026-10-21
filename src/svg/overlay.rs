@@ -513,7 +513,7 @@ pub fn overlay_to_svg(
     );
 
     OverlayResult {
-        svg,
+        svg: super::with_screen_stroke(svg, options.svg.screen_stroke),
         marked,
         not_marked,
         view_box: window,

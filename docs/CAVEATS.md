@@ -150,6 +150,11 @@ What the renderer cannot draw at all (a type the model has no shape for arrives 
 one type that will stay there for good is `ACAD_PROXY_ENTITY`: an opaque per-application
 blob with no geometry.
 
+A wireframe entity of a type the renderer draws -- a 3DSOLID, REGION or mesh -- that has
+no edge to draw (a body whose faces close without one, such as a whole torus or sphere, or
+an empty one) is not a type it cannot draw: it is reported by its ID in
+`ToSvgResult::edgeless`. A wireframe draws edges only, so such a body shows nothing.
+
 A block reference (INSERT, ACAD_TABLE, DIMENSION) whose block the model does not hold -- a
 reference that never resolved, one that points at nothing, or a name with no definition --
 draws nothing and is reported in `ToSvgResult::unresolved_block_refs` by its ID; one whose

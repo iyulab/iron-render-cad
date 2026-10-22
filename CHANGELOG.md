@@ -7,6 +7,8 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-22
+
 ### Added
 
 - `ToSvgOptions::screen_stroke`: every stroke drawn that many CSS pixels wide on screen whatever the zoom, the way a CAD viewer draws lines. The document carries one style rule right after its root tag giving every element `vector-effect: non-scaling-stroke` and that `stroke-width`; without it a stroke is a fraction of the drawing's size, which a viewer scales with the picture and which is under a pixel when the whole drawing is shown. An overlay drawn with it carries the same rule.
@@ -18,6 +20,7 @@ bumps the minor version.
 ### Changed
 
 - `OverlayOptions::proposal_color` is a `ProposalColor` -- `Auto` (the default) or `Given([u8; 3])` -- instead of an sRGB triple. Write `ProposalColor::Given(rgb)` for a colour of your own. The default draws in the same red as before unless the original uses colours close to it, in which case the changes are drawn in the next candidate that stands out, where before they were drawn in the red and the clash reported.
+- Built on `iron-diff-cad` 0.9.1.
 
 ### Fixed
 

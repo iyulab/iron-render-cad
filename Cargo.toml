@@ -1,6 +1,6 @@
 [package]
 name = "iron-render-cad"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2021"
 # Minimum supported Rust version. Measured, not guessed, and checked by CI's
 # `msrv` job with exactly this toolchain -- raise the two together.
@@ -33,7 +33,7 @@ uncad-model = "0.9.0"
 # re-exports all three, which keeps them in lock step.
 resvg = "0.48"
 # The change set an overlay draws. A version dependency, like the model.
-iron-diff-cad = "0.9.0"
+iron-diff-cad = "0.9.1"
 # The overlay's report serializes as JSON, the way the change set does.
 serde = { version = "1.0.229", features = ["derive"] }
 

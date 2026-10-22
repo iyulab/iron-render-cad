@@ -41,7 +41,8 @@ mod visibility;
 pub use crop::{Crop, CropReport, LeftOut, LeftOutReason};
 pub use overlay::{
     overlay_to_svg, ColorConflict, Mark, MarkKind, NotDrawnReason, NotMarked, NotMarkedReason,
-    OverlayFrame, OverlayOptions, OverlayResult, CONFLICT_DELTA_E, DEFAULT_PROPOSAL_COLOR,
+    OverlayFrame, OverlayOptions, OverlayResult, ProposalColor, CONFLICT_DELTA_E,
+    DEFAULT_PROPOSAL_COLOR, PROPOSAL_CANDIDATES,
 };
 pub use scene::{Part, Rect, Scene, TextBox};
 pub(crate) use sheet::render_layout;

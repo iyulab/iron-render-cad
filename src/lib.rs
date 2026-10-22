@@ -40,7 +40,7 @@ pub use png::{
 pub use svg::{
     layout_to_svg, overlay_to_svg, to_svg, ColorConflict, Crop, CropReport, Hidden, LayoutError,
     LeftOut, LeftOutReason, Mark, MarkKind, NotDrawnReason, NotMarked, NotMarkedReason,
-    OverlayFrame, OverlayOptions, OverlayResult, Part, Rect, Scene, SheetSource, Space, TextBox,
-    ToSvgOptions, ToSvgResult, ViewportReport, CONFLICT_DELTA_E, DEFAULT_CAP_HEIGHT,
-    DEFAULT_PROPOSAL_COLOR,
+    OverlayFrame, OverlayOptions, OverlayResult, Part, ProposalColor, Rect, Scene, SheetSource,
+    Space, TextBox, ToSvgOptions, ToSvgResult, ViewportReport, CONFLICT_DELTA_E,
+    DEFAULT_CAP_HEIGHT, DEFAULT_PROPOSAL_COLOR, PROPOSAL_CANDIDATES,
 };

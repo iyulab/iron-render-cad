@@ -13,6 +13,11 @@ bumps the minor version.
 - An overlay marks a change to an entity inside a block definition where every top-level INSERT places it, directly or through other blocks: one mark per reference, carrying the reference in the new `Mark::via`, with the entity alone drawn and clouded there. Such a change was reported as `NOT_TOP_LEVEL` and not drawn; that reason now remains only for a block no top-level INSERT reaches.
 - `Mark::share`: how large a mark's change is in the picture -- the longer side of the box its cloud is drawn around, before the margin, over the picture's. A caller that knows the picture's size in pixels can tell a mark too small to see and frame the changes instead.
 - A change inside a block that a top-level INSERT reaches but that is drawn in neither state is reported as `NOTHING_DRAWN`, not `NOT_TOP_LEVEL`.
+- An overlay can choose its proposal colour: `ProposalColor::Auto` takes the first of `PROPOSAL_CANDIDATES` (red, purple, blue, green, orange -- each at least `CONFLICT_DELTA_E` from the others) that no colour of the original comes close to, or, when every candidate clashes, the one whose clashing colours the original paints with least. The original is drawn once: which colours it uses does not depend on the proposal colour. `OverlayResult::proposal_color` reports the colour drawn, `#rrggbb`.
+
+### Changed
+
+- `OverlayOptions::proposal_color` is a `ProposalColor` -- `Auto` (the default) or `Given([u8; 3])` -- instead of an sRGB triple. Write `ProposalColor::Given(rgb)` for a colour of your own. The default draws in the same red as before unless the original uses colours close to it, in which case the changes are drawn in the next candidate that stands out, where before they were drawn in the red and the clash reported.
 
 ### Fixed
 

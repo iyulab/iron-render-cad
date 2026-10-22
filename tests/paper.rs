@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 
 use iron_diff_cad::{diff, DiffOptions};
 use iron_render_cad::{
-    overlay_to_svg, to_svg, OverlayOptions, Paper, Rect, Scene, Space, ToSvgOptions,
+    overlay_to_svg, to_svg, OverlayOptions, Paper, ProposalColor, Rect, Scene, Space, ToSvgOptions,
 };
 use uncad_model::model::{Entity, LineEntity, Point3D};
 use uncad_model::tables::{LayerRecord, Tables};
@@ -229,7 +229,7 @@ fn a_redline_on_a_dark_page_starts_with_the_page_and_does_not_count_it() {
         svg: on(Paper::Dark),
         // Black: were the page counted as a color of the original, it would
         // be reported as indistinguishable from the proposal color.
-        proposal_color: [0, 0, 0],
+        proposal_color: ProposalColor::Given([0, 0, 0]),
         ..OverlayOptions::default()
     };
     let overlay = overlay_to_svg(&before, &after, &changes, options);

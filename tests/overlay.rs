@@ -11,7 +11,7 @@
 use iron_diff_cad::{diff, Change, DiffOptions};
 use iron_render_cad::{
     overlay_to_svg, svg_to_png, to_svg, MarkKind, NotDrawnReason, NotMarkedReason, OverlayOptions,
-    ToSvgOptions, CONFLICT_DELTA_E,
+    ProposalColor, ToSvgOptions, CONFLICT_DELTA_E, DEFAULT_PROPOSAL_COLOR, PROPOSAL_CANDIDATES,
 };
 use serde_json::Value;
 use uncad_model::model::EntityId;
@@ -507,7 +507,7 @@ fn the_overlay_is_deterministic_and_takes_the_proposal_colour() {
     let (before, after) = (model(&before_json), model(&after_json));
     let changes = diff(&before, &after, by_reference());
     let options = OverlayOptions {
-        proposal_color: [0x00, 0x66, 0xcc],
+        proposal_color: ProposalColor::Given([0x00, 0x66, 0xcc]),
         ..OverlayOptions::default()
     };
     let first = overlay_to_svg(&before, &after, &changes, options);
@@ -584,7 +584,12 @@ fn the_change_layer_is_drawn_in_the_proposal_colour_when_rasterized() {
     let mut found = Vec::new();
     strokes(changes_group, &mut found);
     assert!(found.len() >= 2, "the hole and its cloud: {found:?}");
-    assert!(found.iter().all(|&c| c == (0xe4, 0x00, 0x2b)), "{found:?}");
+    let hex = |c: &(u8, u8, u8)| format!("#{:02x}{:02x}{:02x}", c.0, c.1, c.2);
+    assert!(
+        found.iter().all(|c| hex(c) == overlay.proposal_color),
+        "{} {found:?}",
+        overlay.proposal_color
+    );
 }
 
 #[test]
@@ -674,10 +679,11 @@ fn framing_no_changes_shows_the_whole_drawing() {
     assert!(framed.svg.contains(body(&alone.svg)));
 }
 
-/// G1's holes are drawn in pure red, the default proposal color is a red
-/// too: the report names the clash -- the color, how much of the original
-/// uses it, how close it is -- so a caller can pick another color. With a
-/// blue proposal color nothing in G1 is close and the report is empty.
+/// G1's holes are drawn in pure red, the first proposal color is a red
+/// too: given that red, the report names the clash -- the color, how much
+/// of the original uses it, how close it is -- so a caller can pick another
+/// color. With a blue proposal color nothing in G1 is close and the report
+/// is empty. Left to choose, the overlay moves past the red on its own.
 #[test]
 fn an_original_color_close_to_the_proposal_color_is_reported() {
     let before_json = g1_json();
@@ -686,7 +692,16 @@ fn an_original_color_close_to_the_proposal_color_is_reported() {
     let (before, after) = (model(&before_json), model(&after_json));
     let changes = diff(&before, &after, by_reference());
 
-    let red = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+    let red = overlay_to_svg(
+        &before,
+        &after,
+        &changes,
+        OverlayOptions {
+            proposal_color: ProposalColor::Given(DEFAULT_PROPOSAL_COLOR),
+            ..OverlayOptions::default()
+        },
+    );
+    assert_eq!(red.proposal_color, "#e4002b");
     let [conflict] = red.proposal_color_conflicts.as_slice() else {
         panic!("one clash expected: {:?}", red.proposal_color_conflicts)
     };
@@ -704,7 +719,7 @@ fn an_original_color_close_to_the_proposal_color_is_reported() {
         &after,
         &changes,
         OverlayOptions {
-            proposal_color: [0x00, 0x66, 0xcc],
+            proposal_color: ProposalColor::Given([0x00, 0x66, 0xcc]),
             ..OverlayOptions::default()
         },
     );
@@ -712,5 +727,23 @@ fn an_original_color_close_to_the_proposal_color_is_reported() {
         blue.proposal_color_conflicts.is_empty(),
         "{:?}",
         blue.proposal_color_conflicts
+    );
+
+    // Chosen: the next candidate, drawn in one pass, with nothing close.
+    let auto = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
+    let [r, g, b] = PROPOSAL_CANDIDATES[1];
+    let purple = format!("#{r:02x}{g:02x}{b:02x}");
+    assert_eq!(auto.proposal_color, purple);
+    assert!(auto.proposal_color_conflicts.is_empty());
+    assert!(
+        auto.svg.contains(&format!("stroke:{purple}")),
+        "{}",
+        auto.svg
+    );
+    // The original layer is the same either way.
+    let original = |svg: &str| svg[svg.find("<g id=\"original\">").unwrap()..].to_string();
+    assert_eq!(
+        original(&auto.svg)[..original(&auto.svg).find("<g id=\"changes\">").unwrap()],
+        original(&red.svg)[..original(&red.svg).find("<g id=\"changes\">").unwrap()]
     );
 }

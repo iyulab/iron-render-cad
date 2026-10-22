@@ -19,9 +19,37 @@ use std::fmt::Write as _;
 use uncad_model::model::{Entity, EntityId, Point2D};
 use uncad_model::CadDatabase;
 
-/// The proposal colour [`OverlayOptions`] uses when none is given: red, as
-/// in "redline".
+/// The first proposal colour: red, as in "redline".
 pub const DEFAULT_PROPOSAL_COLOR: [u8; 3] = [0xe4, 0x00, 0x2b];
+
+/// The colours [`ProposalColor::Auto`] chooses from, in order: red first,
+/// then purple, blue, green and orange -- hues a drawing seldom uses for
+/// its own lines, each at least [`CONFLICT_DELTA_E`] from every other, so
+/// that moving past one that clashes with the drawing never lands on a
+/// near copy of it.
+pub const PROPOSAL_CANDIDATES: [[u8; 3]; 5] = [
+    DEFAULT_PROPOSAL_COLOR,
+    [0xc0, 0x00, 0xff],
+    [0x00, 0x60, 0xff],
+    [0x00, 0xa0, 0x40],
+    [0xff, 0x80, 0x00],
+];
+
+/// The colour the change layer is drawn in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum ProposalColor {
+    /// The first of [`PROPOSAL_CANDIDATES`] no colour of the original comes
+    /// close to ([`OverlayResult::proposal_color_conflicts`] empty). When
+    /// every candidate clashes, the one whose clashing colours the original
+    /// paints with least often, the earlier on a tie. The original is drawn
+    /// once either way: which colours it uses does not depend on the
+    /// proposal colour.
+    #[default]
+    Auto,
+    /// This sRGB colour, whatever the original uses.
+    Given([u8; 3]),
+}
 
 /// How [`overlay_to_svg`] draws.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,10 +61,10 @@ pub struct OverlayOptions {
     /// a dark page ([`crate::Paper::Dark`]) both states' colors are
     /// resolved for it and the document starts with a black rectangle
     /// covering its view, outside the original layer; the proposal color
-    /// is drawn as given.
+    /// is drawn as given or chosen.
     pub svg: ToSvgOptions,
-    /// The sRGB colour every mark of the change layer is drawn in.
-    pub proposal_color: [u8; 3],
+    /// The colour every mark of the change layer is drawn in.
+    pub proposal_color: ProposalColor,
     /// What the picture frames.
     pub frame: OverlayFrame,
 }
@@ -62,7 +90,7 @@ impl Default for OverlayOptions {
     fn default() -> Self {
         OverlayOptions {
             svg: ToSvgOptions::default(),
-            proposal_color: DEFAULT_PROPOSAL_COLOR,
+            proposal_color: ProposalColor::Auto,
             frame: OverlayFrame::Drawing,
         }
     }
@@ -216,10 +244,14 @@ pub struct OverlayResult {
     /// caller adding its own marks (a revision symbol by a cloud) sizes
     /// them by.
     pub stroke_width: f64,
+    /// The colour the change layer is drawn in, `#rrggbb`: the one given, or
+    /// the one [`ProposalColor::Auto`] chose.
+    pub proposal_color: String,
     /// The colors the original layer paints with that are hard to tell from
-    /// the proposal color (within [`CONFLICT_DELTA_E`]), nearest first. Not
-    /// empty means some changes may not stand out from the original; a
-    /// caller can pick another [`OverlayOptions::proposal_color`].
+    /// [`OverlayResult::proposal_color`] (within [`CONFLICT_DELTA_E`]),
+    /// nearest first. Not empty means some changes may not stand out from
+    /// the original: with a given colour, a caller can give another; with
+    /// [`ProposalColor::Auto`], every candidate clashes with the drawing.
     pub proposal_color_conflicts: Vec<ColorConflict>,
     /// The top-level entities of the first state the original layer does
     /// not draw -- the outliers its crop set aside (see
@@ -237,7 +269,7 @@ pub struct OverlayResult {
 /// with `options.svg`, byte for byte when no change reaches outside that
 /// render's view box (when one does, the view box grows and the layer is
 /// the same render written for the larger window). The second layer, in
-/// `options.proposal_color`:
+/// the proposal color ([`OverlayOptions::proposal_color`]):
 ///
 /// | Change | Drawn |
 /// |---|---|
@@ -483,7 +515,13 @@ pub fn overlay_to_svg(
     }
 
     let [x, y, width, height] = view_box;
-    let [r, g, bl] = options.proposal_color;
+    let defs = b.defs_block(stroke_width);
+    let mut used = colors_used(&defs);
+    for (c, uses) in colors_used(&original) {
+        *used.entry(c).or_insert(0) += uses;
+    }
+    let (proposal, proposal_color_conflicts) = choose_proposal(options.proposal_color, &used);
+    let [r, g, bl] = proposal;
     let color = format!("#{r:02x}{g:02x}{bl:02x}");
     let dash = format!(
         "{} {}",
@@ -493,7 +531,6 @@ pub fn overlay_to_svg(
     let style = format!(
         "<style>#changes *{{stroke:{color};fill:none}}#changes text,#changes tspan{{fill:{color};stroke:none}}#changes .removed *,#changes .unknown{{stroke-dasharray:{dash}}}</style>"
     );
-    let defs = b.defs_block(stroke_width);
     let left_out = b
         .crop
         .left_out
@@ -501,10 +538,6 @@ pub fn overlay_to_svg(
         .filter(|l| l.reason.is_set_aside())
         .cloned()
         .collect();
-    let proposal_color_conflicts = color_conflicts(
-        options.proposal_color,
-        colors_used(&defs).into_iter().chain(colors_used(&original)),
-    );
     let root_stroke = root_stroke(options.svg.paper);
     let page = page(options.svg.paper, view_box);
     let origin = origin_attribute(b.origin);
@@ -519,8 +552,36 @@ pub fn overlay_to_svg(
         view_box: window,
         origin: b.origin,
         stroke_width,
+        proposal_color: color,
         proposal_color_conflicts,
         left_out,
+    }
+}
+
+/// The proposal colour `wanted` resolves to against the colours the
+/// original paints with, and the original's colours that clash with it.
+fn choose_proposal(
+    wanted: ProposalColor,
+    used: &BTreeMap<[u8; 3], usize>,
+) -> ([u8; 3], Vec<ColorConflict>) {
+    let conflicts = |c: [u8; 3]| color_conflicts(c, used.iter().map(|(&k, &v)| (k, v)));
+    match wanted {
+        ProposalColor::Given(c) => (c, conflicts(c)),
+        ProposalColor::Auto => {
+            let mut best: Option<([u8; 3], Vec<ColorConflict>, usize)> = None;
+            for c in PROPOSAL_CANDIDATES {
+                let found = conflicts(c);
+                let clashing: usize = found.iter().map(|f| f.uses).sum();
+                if found.is_empty() {
+                    return (c, found);
+                }
+                if best.as_ref().is_none_or(|(_, _, least)| clashing < *least) {
+                    best = Some((c, found, clashing));
+                }
+            }
+            let (c, found, _) = best.expect("the candidates are not empty");
+            (c, found)
+        }
     }
 }
 
@@ -973,5 +1034,45 @@ mod tests {
             color_conflicts(DEFAULT_PROPOSAL_COLOR, [(DEFAULT_PROPOSAL_COLOR, 1)])[0].delta_e,
             0.0
         );
+    }
+
+    #[test]
+    fn the_candidates_are_far_enough_apart_that_none_clashes_with_another() {
+        for (i, &a) in PROPOSAL_CANDIDATES.iter().enumerate() {
+            for &b in &PROPOSAL_CANDIDATES[i + 1..] {
+                assert!(
+                    color_conflicts(a, [(b, 1)]).is_empty(),
+                    "{a:?} and {b:?} are within {CONFLICT_DELTA_E}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn auto_takes_the_first_clear_candidate_or_the_least_clashing_one() {
+        let none = BTreeMap::new();
+        assert_eq!(
+            choose_proposal(ProposalColor::Auto, &none).0,
+            DEFAULT_PROPOSAL_COLOR
+        );
+
+        let reds = BTreeMap::from([([0xff, 0, 0], 3)]);
+        let (chosen, conflicts) = choose_proposal(ProposalColor::Auto, &reds);
+        assert_eq!(chosen, PROPOSAL_CANDIDATES[1]);
+        assert!(conflicts.is_empty(), "{conflicts:?}");
+
+        // Every candidate clashes: the one painted over least wins, the
+        // earlier on a tie.
+        let mut all: BTreeMap<[u8; 3], usize> =
+            PROPOSAL_CANDIDATES.iter().map(|&c| (c, 5)).collect();
+        all.insert(PROPOSAL_CANDIDATES[2], 2);
+        all.insert(PROPOSAL_CANDIDATES[4], 2);
+        let (chosen, conflicts) = choose_proposal(ProposalColor::Auto, &all);
+        assert_eq!(chosen, PROPOSAL_CANDIDATES[2]);
+        assert_eq!(conflicts.len(), 1, "{conflicts:?}");
+
+        let given = choose_proposal(ProposalColor::Given([0xff, 0, 0]), &reds);
+        assert_eq!(given.0, [0xff, 0, 0]);
+        assert_eq!(given.1.len(), 1);
     }
 }

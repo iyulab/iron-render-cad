@@ -7,6 +7,12 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-27
+
+### Changed
+
+- Built on `iron-diff-cad` 0.10.0.
+
 ## [0.11.0] - 2026-10-22
 
 ### Added

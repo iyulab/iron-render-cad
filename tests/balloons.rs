@@ -155,6 +155,15 @@ fn a_balloon_outside_the_drawing_grows_the_picture_instead_of_leaving() {
     let p = &result.placed[0];
     assert!(result.view_box.max_x >= p.center.x + p.radius);
     assert!(result.view_box.max_y >= p.center.y + p.radius);
+    // The leader's far end is in the picture too, not only its circle.
+    // (The circle sits 2.5 radii up from its target, so the leader's end is further out than the
+    // circle's own padding reaches -- a window grown by circles alone would cut it off.)
+    for x in [p.leader_end.x, p.center.x] {
+        assert!(result.view_box.min_x <= x && x <= result.view_box.max_x);
+    }
+    for y in [p.leader_end.y, p.center.y] {
+        assert!(result.view_box.min_y <= y && y <= result.view_box.max_y);
+    }
 }
 
 #[test]
@@ -266,4 +275,15 @@ fn the_size_and_the_colour_follow_the_options() {
     assert_eq!(result.placed[0].radius, 4.0);
     assert_eq!(result.color, "#0060ff");
     assert!(result.svg.contains("#balloons *{stroke:#0060ff;fill:none}"));
+}
+
+#[test]
+fn a_balloons_leader_end_is_in_the_picture_even_when_its_circle_stands_nearer_the_drawing() {
+    let db = g1();
+    // Below and left of the drawing the circle (placed up from its target) is nearer the drawing
+    // than the target is: a window grown by the circle alone would stop short of the leader's end.
+    let result = balloons_to_svg(&db, &[at("9", -5000.0, -5000.0)], BalloonOptions::default());
+    let p = &result.placed[0];
+    assert!(result.view_box.min_x <= p.leader_end.x);
+    assert!(result.view_box.min_y <= p.leader_end.y);
 }

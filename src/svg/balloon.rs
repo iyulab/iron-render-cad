@@ -310,14 +310,27 @@ pub fn balloons_to_svg(
         }
     }
 
-    // The window: the original's view box, grown to take in every circle.
+    // The window: the original's view box, grown to take in every circle and
+    // every leader end -- a point given outside the drawing is where its
+    // leader must reach, not only where its circle sits.
     let window = placed
         .iter()
-        .map(|p| {
-            pad(
-                Rect::new(p.center.x, p.center.y, p.center.x, p.center.y),
-                p.radius + stroke_width,
-            )
+        .flat_map(|p| {
+            [
+                pad(
+                    Rect::new(p.center.x, p.center.y, p.center.x, p.center.y),
+                    p.radius + stroke_width,
+                ),
+                pad(
+                    Rect::new(
+                        p.leader_end.x,
+                        p.leader_end.y,
+                        p.leader_end.x,
+                        p.leader_end.y,
+                    ),
+                    stroke_width,
+                ),
+            ]
         })
         .fold(scene.view_box, union);
     let view_box = if window == scene.view_box {

@@ -421,6 +421,16 @@ reference first), which is how the two are matched.
 - **The revision cloud is arithmetic.** It sits 10 stroke widths outside the box it marks. Each side is cut into equal chords of about 16 stroke widths, at most 100 a side, and each chord bows outward as a circular arc of radius 0.6 chords.
 - **Confidence is not shown**, here or in a plain render: principle 4 is not implemented yet, since every entity a vector reader produces is high-confidence. When a low-confidence producer exists, the overlay will need the same treatment as the render.
 
+## The balloons
+
+`balloons_to_svg` renders the drawing once and writes the original layer exactly as `to_svg` does, then one group per balloon.
+
+- **The label is the caller's.** It is written as given and never read: the renderer does not number, renumber or sort. A label is shrunk to fit the circle by the same 0.6 em a character estimate the render uses for texts, so a long one is small, not clipped.
+- **The target is the centre of the box the entity covers.** For a dimension that box includes its arrowheads and extension lines, so the leader ends near the middle of the whole dimension, not on its text. A balloon that must point at a place inside an entity is given as a point.
+- **Placement avoids the original's texts by their estimated boxes** (0.6 em a character), not by the glyphs a font lays out: a text in a wider face can still be touched. Lines and shapes of the original are not avoided -- a balloon is drawn over them, on a page-coloured disc so the label stays legible.
+- **A crowd is not hidden.** More balloons around one place than there are spots (eight directions at three distances) end in overlap; each such balloon is reported `crowded`.
+- **A balloon on an entity inside a block definition is drawn at every top-level reference.** Which of the places is "the" place would be a guess, so each gets one (`via` names the reference).
+
 ## No image comparison, by design
 
 No test in this crate decides pass/fail by comparing rendered images, and the crate has no

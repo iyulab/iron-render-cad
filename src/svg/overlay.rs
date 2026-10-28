@@ -560,7 +560,7 @@ pub fn overlay_to_svg(
 
 /// The proposal colour `wanted` resolves to against the colours the
 /// original paints with, and the original's colours that clash with it.
-fn choose_proposal(
+pub(super) fn choose_proposal(
     wanted: ProposalColor,
     used: &BTreeMap<[u8; 3], usize>,
 ) -> ([u8; 3], Vec<ColorConflict>) {
@@ -595,7 +595,7 @@ pub const CONFLICT_DELTA_E: f64 = 30.0;
 
 /// Every hex color an SVG fragment paints with -- `stroke`, `fill` and
 /// gradient `stop-color` attributes -- and how many times.
-fn colors_used(svg: &str) -> BTreeMap<[u8; 3], usize> {
+pub(super) fn colors_used(svg: &str) -> BTreeMap<[u8; 3], usize> {
     let mut used = BTreeMap::new();
     for attribute in ["stroke=\"#", "fill=\"#", "stop-color=\"#"] {
         for (at, _) in svg.match_indices(attribute) {
@@ -696,12 +696,12 @@ struct PlacedLayer {
 /// What [`placements`] found: a mark per top-level reference (the
 /// reference, the cloud, whether the second state is drawn there) and the
 /// layers that draw them.
-struct Placed {
-    marks: Vec<(EntityId, Rect, bool)>,
+pub(super) struct Placed {
+    pub(super) marks: Vec<(EntityId, Rect, bool)>,
     layers: Vec<PlacedLayer>,
     /// Whether a top-level INSERT reaches the entity in either state --
     /// when none drew it, the change is drawn nowhere, not out of reach.
-    reached: bool,
+    pub(super) reached: bool,
 }
 
 /// A change to an entity inside a block definition, shown where every
@@ -713,7 +713,7 @@ struct Placed {
 /// rendered as [`crate::to_svg`] would, with no crop. A part of that render
 /// is one top-level INSERT drawing the entity alone, at every place the
 /// reference puts it.
-fn placements(
+pub(super) fn placements(
     kind: MarkKind,
     before: Option<(&CadDatabase, EntityId)>,
     after: Option<(&CadDatabase, EntityId)>,
@@ -869,7 +869,7 @@ fn is_space(name: &str) -> bool {
 
 /// Every top-level part of `scene` by its entity's reference ID. A layout's
 /// view through a viewport is not an entity of the drawing and is left out.
-fn top_level(scene: &Scene) -> BTreeMap<EntityId, usize> {
+pub(super) fn top_level(scene: &Scene) -> BTreeMap<EntityId, usize> {
     scene
         .parts
         .iter()
@@ -880,7 +880,7 @@ fn top_level(scene: &Scene) -> BTreeMap<EntityId, usize> {
 }
 
 /// The world box part `i` of `scene` covers, when it drew something.
-fn drawn_extent(scene: &Scene, i: usize) -> Option<Rect> {
+pub(super) fn drawn_extent(scene: &Scene, i: usize) -> Option<Rect> {
     let part = &scene.parts[i];
     if part.drawn {
         part.extent
@@ -889,7 +889,7 @@ fn drawn_extent(scene: &Scene, i: usize) -> Option<Rect> {
     }
 }
 
-fn union(a: Rect, b: Rect) -> Rect {
+pub(super) fn union(a: Rect, b: Rect) -> Rect {
     Rect::new(
         a.min_x.min(b.min_x),
         a.min_y.min(b.min_y),
@@ -925,7 +925,7 @@ fn around(changed: Rect, drawing: &Rect) -> Rect {
     union(cut, changed)
 }
 
-fn pad(r: Rect, by: f64) -> Rect {
+pub(super) fn pad(r: Rect, by: f64) -> Rect {
     Rect::new(r.min_x - by, r.min_y - by, r.max_x + by, r.max_y + by)
 }
 

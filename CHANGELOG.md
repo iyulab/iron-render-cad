@@ -7,6 +7,10 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Added
+
+- `balloons_to_svg`: numbered balloons drawn on top of the original. The caller supplies each balloon's label (written as given, so `5.1` is as good as `5`) and what it points at -- an entity (the leader ends at the centre of the box the entity covers; an entity inside a block definition gets one balloon at every top-level reference that places the block) or a point in drawing units. The original layer is `to_svg`'s render byte for byte; the balloon layer is one colour, chosen against the original's colours as for a redline. Balloons are placed in input order, each at the first of eight directions and three distances from its target whose circle clears the original's texts and the balloons already placed; when none does, it is drawn at the first and reported `crowded`, so a number never disappears from the picture. A balloon marked `Dropped` is drawn dashed. A balloon that cannot be drawn is reported by name (`NotPlacedReason`). New types: `Balloon`, `BalloonTarget`, `BalloonState`, `BalloonSize`, `BalloonOptions`, `BalloonResult`, `PlacedBalloon`, `NotPlaced`, `NotPlacedReason`.
+
 ## [0.12.0] - 2026-10-27
 
 ### Changed

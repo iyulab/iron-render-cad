@@ -38,9 +38,13 @@ pub use png::{
     ToPngResult, View, DEFAULT_MAX_EDGE,
 };
 pub use svg::{
-    layout_to_svg, overlay_to_svg, to_svg, ColorConflict, Crop, CropReport, Hidden, LayoutError,
-    LeftOut, LeftOutReason, Mark, MarkKind, NotDrawnReason, NotMarked, NotMarkedReason,
-    OverlayFrame, OverlayOptions, OverlayResult, Part, ProposalColor, Rect, Scene, SheetSource,
-    Space, TextBox, ToSvgOptions, ToSvgResult, ViewportReport, CONFLICT_DELTA_E,
+    balloons_to_svg, layout_to_svg, overlay_to_svg, to_svg, ColorConflict, Crop, CropReport,
+    Hidden, LayoutError, LeftOut, LeftOutReason, Mark, MarkKind, NotDrawnReason, NotMarked,
+    NotMarkedReason, OverlayFrame, OverlayOptions, OverlayResult, Part, ProposalColor, Rect, Scene,
+    SheetSource, Space, TextBox, ToSvgOptions, ToSvgResult, ViewportReport, CONFLICT_DELTA_E,
     DEFAULT_CAP_HEIGHT, DEFAULT_PROPOSAL_COLOR, PROPOSAL_CANDIDATES,
+};
+pub use svg::{
+    Balloon, BalloonOptions, BalloonResult, BalloonSize, BalloonState, BalloonTarget, NotPlaced,
+    NotPlacedReason, PlacedBalloon,
 };

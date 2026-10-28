@@ -21,7 +21,7 @@ Input is expressed in the [uncad-model](https://github.com/iyulab/uncad-model) e
 
 ## Status
 
-0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything) -- `layout_to_svg` and `layout_to_png` one paper layout as its sheet, with the model shown through its viewports -- report the entity types they could not draw, the block references that drew nothing, what the bounds on the file's numbers left out and how much the drawing itself hides (layers off, frozen or not plotted, invisible entities) and which entities the picture's frame leaves out and why, and are deterministic byte for byte. A `Scene` keeps one render, one part per top-level entity with the box of the world it covers, and writes a document of any window from any subset of those parts -- tiles of a large plan without walking it once per tile -- and draws any `View` of it, a grid of pixels laid over the world that also says which world point each pixel shows, and says where each of its texts lands with a given set of fonts. A malformed drawing may cost a missing entity and a note saying so, never the process. `overlay_to_svg` draws a change set on top of the original: the original layer exactly as `to_svg` draws it, and above it, in one proposal colour (given, or chosen to stand out from the original's own colours), what each entity became, what was removed (dashed) and a revision cloud around every change; a change whose counterpart is undecided gets a dashed cloud and no geometry, and a change the picture cannot show is reported with the reason. The design principles are
+0.x. `to_svg` and `to_png` render a `uncad_model::CadDatabase` (model space, paper space or everything) -- `layout_to_svg` and `layout_to_png` one paper layout as its sheet, with the model shown through its viewports -- report the entity types they could not draw, the block references that drew nothing, what the bounds on the file's numbers left out and how much the drawing itself hides (layers off, frozen or not plotted, invisible entities) and which entities the picture's frame leaves out and why, and are deterministic byte for byte. A `Scene` keeps one render, one part per top-level entity with the box of the world it covers, and writes a document of any window from any subset of those parts -- tiles of a large plan without walking it once per tile -- and draws any `View` of it, a grid of pixels laid over the world that also says which world point each pixel shows, and says where each of its texts lands with a given set of fonts. A malformed drawing may cost a missing entity and a note saying so, never the process. `overlay_to_svg` draws a change set on top of the original: the original layer exactly as `to_svg` draws it, and above it, in one proposal colour (given, or chosen to stand out from the original's own colours), what each entity became, what was removed (dashed) and a revision cloud around every change; a change whose counterpart is undecided gets a dashed cloud and no geometry, and a change the picture cannot show is reported with the reason. `balloons_to_svg` draws numbered balloons on top of the original, the same way: the original layer exactly as `to_svg` draws it, and above it a circle with the caller's label and a leader for each balloon, placed deterministically clear of the original's texts and of each other; a balloon is never left out for lack of room (it is drawn overlapping and reported), and one that cannot be drawn is reported with the reason. The design principles are
 in [docs/principles.md](docs/principles.md); what is approximated and what is unverified is in
 [docs/CAVEATS.md](docs/CAVEATS.md).
 
@@ -61,6 +61,22 @@ let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default(
 std::fs::write("redline.svg", &overlay.svg)?;
 for m in &overlay.not_marked {
     println!("change {} ({:?}) not drawn: {:?}", m.entry, m.id, m.reason);
+}
+```
+
+Number things on a drawing -- the labels are yours, the renderer places the circles:
+
+```rust
+use iron_render_cad::{balloons_to_svg, Balloon, BalloonOptions, BalloonTarget};
+
+let balloons = [
+    Balloon::new("1", BalloonTarget::Entity(hole_id)),
+    Balloon::new("1.1", BalloonTarget::Point(uncad_model::model::Point2D { x: 40.0, y: 12.5 })),
+];
+let numbered = balloons_to_svg(&drawing, &balloons, BalloonOptions::default());
+std::fs::write("balloons.svg", &numbered.svg)?;
+for n in &numbered.not_placed {
+    println!("balloon {} not drawn: {:?}", n.index, n.reason);
 }
 ```
 

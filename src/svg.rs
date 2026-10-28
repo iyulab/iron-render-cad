@@ -25,6 +25,7 @@
 //! hangs and the box it fills), [`bounds`] (boxes and the cluster trim) and
 //! [`crop`] (the rectangle the picture shows, and what it leaves out).
 
+mod balloon;
 mod bounds;
 mod crop;
 mod format;
@@ -38,6 +39,10 @@ mod spline;
 mod text_codes;
 mod visibility;
 
+pub use balloon::{
+    balloons_to_svg, Balloon, BalloonOptions, BalloonResult, BalloonSize, BalloonState,
+    BalloonTarget, NotPlaced, NotPlacedReason, PlacedBalloon,
+};
 pub use crop::{Crop, CropReport, LeftOut, LeftOutReason};
 pub use overlay::{
     overlay_to_svg, ColorConflict, Mark, MarkKind, NotDrawnReason, NotMarked, NotMarkedReason,

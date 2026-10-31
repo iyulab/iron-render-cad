@@ -2133,137 +2133,14 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
     let color = resolve_entity_color(e.common(), ctx);
     let frame = ctx.frame;
     match e {
-        Entity::Line(l) => {
-            ctx.consider(l.start_point.x, l.start_point.y);
-            ctx.consider(l.end_point.x, l.end_point.y);
-            Some(format!(
-                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{color}\"/>",
-                frame.x(l.start_point.x),
-                frame.y(l.start_point.y),
-                frame.x(l.end_point.x),
-                frame.y(l.end_point.y)
-            ))
-        }
+        Entity::Line(l) => draw_line(l, &color, frame, ctx),
         Entity::Circle(c) if !own_plane(c.extrusion).is_world() => {
             Some(circle_in_own_plane(c, &color, ctx))
         }
-        Entity::Arc(a) => {
-            let Some(sweep) = a.sweep() else {
-                // Equal angles: the file does not say whether this is the
-                // whole circle or nothing, so neither is drawn.
-                ctx.undefined_arcs.insert(a.common.id);
-                return None;
-            };
-            if !own_plane(a.extrusion).is_world() {
-                return Some(arc_in_own_plane(a, sweep, &color, ctx));
-            }
-            Some(world_arc(a, sweep, &color, ctx))
-        }
-        Entity::Circle(c) => {
-            ctx.consider_box(&Box2D {
-                min_x: c.center.x - c.radius,
-                max_x: c.center.x + c.radius,
-                min_y: c.center.y - c.radius,
-                max_y: c.center.y + c.radius,
-            });
-            Some(format!(
-                "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.x(c.center.x),
-                frame.y(c.center.y),
-                clean(c.radius)
-            ))
-        }
-        Entity::Ellipse(el) => {
-            let rx = el.major_axis_endpoint.x.hypot(el.major_axis_endpoint.y);
-            let ry = rx * el.axis_ratio;
-            let theta = el.major_axis_endpoint.y.atan2(el.major_axis_endpoint.x);
-            let rot = theta.to_degrees();
-            let (cx, cy) = (frame.x(el.center.x), frame.y(el.center.y));
-            let sweep = el.sweep();
-            if sweep >= std::f64::consts::TAU {
-                // The box of the ellipse this element draws: semi-axes rx
-                // and ry turned by the major axis's angle.
-                let (cos, sin) = (theta.cos(), theta.sin());
-                let hx = (rx * cos).hypot(ry * sin);
-                let hy = (rx * sin).hypot(ry * cos);
-                ctx.consider_box(&Box2D {
-                    min_x: el.center.x - hx,
-                    max_x: el.center.x + hx,
-                    min_y: el.center.y - hy,
-                    max_y: el.center.y + hy,
-                });
-                let (rx, ry) = (clean(rx), clean(ry.abs()));
-                return Some(format!(
-                    "<ellipse cx=\"{cx}\" cy=\"{cy}\" rx=\"{rx}\" ry=\"{ry}\" transform=\"rotate({} {cx} {cy})\" fill=\"none\" stroke=\"{color}\"/>",
-                    neg(rot)
-                ));
-            }
-            let e = el.extrusion;
-            // Files write the Z axis with rounding noise in the other two
-            // components; a plane that far from level is still level.
-            let flat = e.x.abs().max(e.y.abs()) <= 1e-9 * e.z.abs();
-            if !flat {
-                // A tilted plane: its outline seen from above is not an
-                // ellipse with these axes, so it is drawn through points.
-                let points: Vec<Point2D> = (0..=ELLIPSE_SAMPLES)
-                    .map(|i| {
-                        ellipse_point(
-                            el,
-                            el.start_angle + sweep * (i as f64 / ELLIPSE_SAMPLES as f64),
-                        )
-                    })
-                    .collect();
-                ctx.consider_all(&points);
-                return Some(polyline_element(&points, false, &color, frame));
-            }
-            // The arc's own extent, not the whole ellipse's.
-            ctx.consider_box(&ellipse_arc_extent(el));
-            let (rx, ry) = (clean(rx), clean(ry.abs()));
-            // A partial ellipse: the same exact arc command ARC uses, with
-            // the axes and rotation of the ellipse. Counter-clockwise in the
-            // drawing is clockwise once y is flipped, hence sweep-flag 0 --
-            // and 1 for a mirrored ellipse, whose parameters run clockwise.
-            let p1 = ellipse_point(el, el.start_angle);
-            let p2 = ellipse_point(el, el.start_angle + sweep);
-            let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
-            let sweep_flag = if e.z < 0.0 { 1 } else { 0 };
-            Some(format!(
-                "<path d=\"M {} {} A {rx} {ry} {} {large} {sweep_flag} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.x(p1.x),
-                frame.y(p1.y),
-                neg(rot),
-                frame.x(p2.x),
-                frame.y(p2.y)
-            ))
-        }
-        Entity::LwPolyline(p) | Entity::Polyline2D(p) => {
-            let plane = own_plane(p.extrusion);
-            if plane.is_world() {
-                return Some(polyline_drawn(&p.vertices, p.closed, &color, ctx));
-            }
-            if plane.is_flat() {
-                // A mirror copy: its vertices taken to the world, and every
-                // arc turning the other way there.
-                let world: Vec<PolylineVertex> = p
-                    .vertices
-                    .iter()
-                    .map(|v| PolylineVertex {
-                        point: seen_from_above(
-                            plane,
-                            Point3D {
-                                x: v.point.x,
-                                y: v.point.y,
-                                z: p.elevation,
-                            },
-                        ),
-                        bulge: -v.bulge,
-                        ..*v
-                    })
-                    .collect();
-                return Some(polyline_drawn(&world, p.closed, &color, ctx));
-            }
-            Some(polyline_on_tilted_plane(p, plane, &color, ctx))
-        }
+        Entity::Arc(a) => draw_arc(a, &color, ctx),
+        Entity::Circle(c) => draw_circle(c, &color, frame, ctx),
+        Entity::Ellipse(el) => draw_ellipse(el, &color, frame, ctx),
+        Entity::LwPolyline(p) | Entity::Polyline2D(p) => draw_lw_polyline(p, &color, ctx),
         Entity::Polyline3D(p) => {
             if p.vertices.is_empty() {
                 return None;
@@ -2271,329 +2148,23 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
             ctx.consider_all_3d(&p.vertices);
             Some(polyline_element(&xy(&p.vertices), p.closed, &color, frame))
         }
-        Entity::Text(t) => {
-            let layout = TextLayout::new(
-                justify::anchor(
-                    t.start_point,
-                    t.alignment_point,
-                    t.horizontal_justification,
-                    t.vertical_justification,
-                    ctx.descender(),
-                ),
-                effective_text_height(t.text_height),
-                t.rotation,
-                t.oblique_angle,
-                t.width_factor,
-            )
-            .in_plane(own_plane(t.extrusion), t.elevation);
-            let text = text_codes::decode(&t.text, false);
-            let estimate = justify::consider_text_box(&layout, &text, ctx);
-            let id = ctx.record_text(t.common.id, &text, estimate);
-            Some(justify::text_element(
-                &id,
-                &layout,
-                &color,
-                &text,
-                frame,
-                ctx.cap_height,
-            ))
-        }
-        Entity::Attrib(a) => {
-            let layout = TextLayout::new(
-                justify::anchor(
-                    a.start_point,
-                    a.alignment_point,
-                    a.horizontal_justification,
-                    a.vertical_justification,
-                    ctx.descender(),
-                ),
-                effective_text_height(a.text_height),
-                a.rotation,
-                a.oblique_angle,
-                a.width_factor,
-            )
-            .in_plane(own_plane(a.extrusion), a.elevation);
-            if a.text.is_empty() {
-                ctx.consider(layout.anchor.at.x, layout.anchor.at.y);
-                return Some(String::new());
-            }
-            let text = text_codes::decode(&a.text, false);
-            let estimate = justify::consider_text_box(&layout, &text, ctx);
-            let id = ctx.record_text(a.common.id, &text, estimate);
-            Some(justify::text_element(
-                &id,
-                &layout,
-                &color,
-                &text,
-                frame,
-                ctx.cap_height,
-            ))
-        }
-        Entity::Tolerance(t) => {
-            ctx.consider(t.insertion_point.x, t.insertion_point.y);
-            if t.text_value.is_empty() {
-                return Some(String::new());
-            }
-            // A frame whose file never stated a height still has to be drawn
-            // at some size -- the renderer's choice, which is why the model
-            // does not make it: the text height (DIMTXT) of the dimension
-            // style the frame names, and 1 when that states none either.
-            let positive = |h: f64| (h.is_finite() && h > 0.0).then_some(h);
-            let height = t
-                .text_height
-                .and_then(positive)
-                .or_else(|| {
-                    t.style_name
-                        .resolved()
-                        .and_then(|name| ctx.tables.dim_styles.get(name))
-                        .and_then(|style| style.text_height)
-                        .and_then(positive)
-                })
-                .unwrap_or(1.0);
-            let layout = TextLayout::new(
-                Anchor {
-                    at: Point2D {
-                        x: t.insertion_point.x,
-                        y: t.insertion_point.y,
-                    },
-                    anchor: "start",
-                    drop: 0.0,
-                },
-                height,
-                0.0,
-                0.0,
-                1.0,
-            );
-            // Its box is not counted towards the extent (the insertion
-            // point is), but it is estimated like any text's.
-            // A frame's text is written in MTEXT codes: `{\Fgdt;j}` picks
-            // the symbol font for the letter after it (fonts are not drawn,
-            // so the letter is). What `%%v` stands for in a frame is not a
-            // code this renderer knows, so it stays as written.
-            let text = text_codes::decode(&t.text_value, true);
-            let estimate = justify::estimate_text_box(&layout, &text, ctx);
-            let id = ctx.record_text(t.common.id, &text, estimate);
-            Some(justify::text_element(
-                &id,
-                &layout,
-                &color,
-                &text,
-                frame,
-                ctx.cap_height,
-            ))
-        }
-        Entity::MText(m) => mtext_element(
-            &MTextDrawn {
-                id: m.common.id,
-                text: &m.text,
-                at: m.insertion_point,
-                height: m.text_height,
-                line_spacing_factor: m.line_spacing_factor,
-                rotation: m.rotation,
-                attachment: m.attachment,
-                extents: (m.extents_width, m.extents_height),
-                reference_width: m.reference_width,
-            },
-            &color,
-            ctx,
-        ),
-        Entity::Point(p) => {
-            ctx.consider(p.position.x, p.position.y);
-            Some(point_element(
-                Point2D {
-                    x: p.position.x,
-                    y: p.position.y,
-                },
-                ctx.point_display,
-                &color,
-                frame,
-                ctx.scale,
-            ))
-        }
-        Entity::Solid(s) | Entity::Trace(s) => {
-            // Classic AutoCAD SOLID/TRACE vertex order is 1-2-4-3, not 1-2-3-4.
-            let mut pts = [s.corner1, s.corner2, s.corner4, s.corner3];
-            let plane = own_plane(s.extrusion);
-            if !plane.is_world() {
-                // Written in its own plane: each corner taken to the world.
-                // A quadrilateral of straight edges stays one seen from
-                // above, so this is exact on a tilted plane too.
-                for p in &mut pts {
-                    *p = seen_from_above(
-                        plane,
-                        Point3D {
-                            x: p.x,
-                            y: p.y,
-                            z: s.elevation,
-                        },
-                    );
-                }
-            }
-            ctx.consider_all(&pts);
-            Some(format!(
-                "<polygon points=\"{}\" fill=\"{color}\" fill-opacity=\"0.6\" stroke=\"none\"/>",
-                frame.points(&pts)
-            ))
-        }
-        Entity::Face3D(f) => {
-            // Unlike SOLID, 3DFACE's 4 corners are already sequential.
-            let pts = xy(&[f.corner1, f.corner2, f.corner3, f.corner4]);
-            ctx.consider_all(&pts);
-            if f.invisible_edges.iter().all(|hidden| !hidden) {
-                return Some(format!(
-                    "<polygon points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
-                    frame.points(&pts)
-                ));
-            }
-            // Only the edges the file does not hide: a mesh of faces shows
-            // its outline, not the edges its faces share.
-            let mut d = String::new();
-            for (i, hidden) in f.invisible_edges.iter().enumerate() {
-                if *hidden {
-                    continue;
-                }
-                let (a, b) = (pts[i], pts[(i + 1) % 4]);
-                if !d.is_empty() {
-                    d.push(' ');
-                }
-                let _ = write!(
-                    d,
-                    "M {} {} L {} {}",
-                    frame.x(a.x),
-                    frame.y(a.y),
-                    frame.x(b.x),
-                    frame.y(b.y)
-                );
-            }
-            if d.is_empty() {
-                return Some(String::new());
-            }
-            Some(format!(
-                "<path d=\"{d}\" fill=\"none\" stroke=\"{color}\"/>"
-            ))
-        }
-        Entity::Ray(r) | Entity::XLine(r) => {
-            // A construction line has no end, so only its base point counts
-            // towards the extent: a viewBox that had to contain the line
-            // would show nothing else. Where the line stops is the edge of
-            // the picture, known only once every entity has been walked, so
-            // the element is a placeholder cut to the viewBox at the end
-            // (see [`infinite`]).
-            ctx.consider(r.point.x, r.point.y);
-            // The direction in the element's own frame: y flipped, like
-            // every coordinate written here.
-            let (dx, dy) = (r.vector.x, -r.vector.y);
-            let len = dx.hypot(dy);
-            if !(len.is_finite() && len > 0.0) {
-                // No direction in plan: nothing to draw.
-                return None;
-            }
-            Some(infinite::placeholder(
-                &infinite::InfiniteLine {
-                    matrix: ctx.svg_matrix,
-                    base: (frame.x(r.point.x), frame.y(r.point.y)),
-                    dir: (dx / len, dy / len),
-                    both_ways: matches!(e, Entity::XLine(_)),
-                },
-                &color,
-            ))
-        }
-        Entity::Insert(i) => {
-            // In a plane parallel to the world's -- the world's own, or a
-            // mirror copy's -- the model places the block exactly. A tilted
-            // plane has no exact 2D placement: the block is placed in its
-            // plane and that plane seen from above, as a HATCH is.
-            // The block's base point lands on the insertion point.
-            let base = i
-                .block_name
-                .resolved()
-                .and_then(|name| ctx.tables.block_records.get(name))
-                .map_or_else(Point3D::default, |block| block.base_point);
-            let placement = i.world_transform(base).unwrap_or_else(|| {
-                i.transform(base).then(&plane_seen_from_above(
-                    own_plane(i.extrusion),
-                    i.insertion_point.z,
-                ))
-            });
-            Some(render_block_ref(e, &i.block_name, placement, &color, ctx))
-        }
+        Entity::Text(t) => draw_text(t, &color, frame, ctx),
+        Entity::Attrib(a) => draw_attrib(a, &color, frame, ctx),
+        Entity::Tolerance(t) => draw_tolerance(t, &color, frame, ctx),
+        Entity::MText(m) => draw_mtext(m, &color, ctx),
+        Entity::Point(p) => draw_point(p, &color, frame, ctx),
+        Entity::Solid(s) | Entity::Trace(s) => draw_solid(s, &color, frame, ctx),
+        Entity::Face3D(f) => draw_face3d(f, &color, frame, ctx),
+        Entity::Ray(r) | Entity::XLine(r) => draw_ray(r, e, &color, frame, ctx),
+        Entity::Insert(i) => draw_insert(i, e, &color, ctx),
         // A table's block is placed as though based at the origin: the
         // block's base point is not applied here, unlike a block
         // reference's. Every table block seen so far is based there.
-        Entity::AcadTable(a) => Some(render_block_ref(
-            e,
-            &a.block_name,
-            Affine2::placement(
-                Point2D {
-                    x: a.insertion_point.x,
-                    y: a.insertion_point.y,
-                },
-                a.scale.x,
-                a.scale.y,
-                a.rotation,
-            ),
-            &color,
-            ctx,
-        )),
-        Entity::Dimension(d) => {
-            // The cached geometry block is already in final world coordinates,
-            // so it is drawn with an identity transform -- which is also what
-            // keeps its interior in the render's own frame (see
-            // [`render_block_ref`]).
-            let svg = render_block_ref(e, &d.block_name, Affine2::IDENTITY, &color, ctx);
-            if svg.is_empty() {
-                ctx.unsupported.insert("DIMENSION".to_string());
-                return None;
-            }
-            Some(svg)
-        }
-        Entity::Viewport(v) => {
-            // Not real drawing geometry (it is a window onto model space), but
-            // drawing its frame is a reasonable, honest representation.
-            let (cx, cy) = (v.center.x, v.center.y);
-            let (hw, hh) = (v.width / 2.0, v.height / 2.0);
-            let corners = [
-                Point2D {
-                    x: cx - hw,
-                    y: cy - hh,
-                },
-                Point2D {
-                    x: cx + hw,
-                    y: cy - hh,
-                },
-                Point2D {
-                    x: cx + hw,
-                    y: cy + hh,
-                },
-                Point2D {
-                    x: cx - hw,
-                    y: cy + hh,
-                },
-            ];
-            ctx.consider_all(&corners);
-            Some(dashed_outline(&corners, &color, "2,2", frame))
-        }
-        Entity::Wipeout(w) => {
-            // Outline only, not filled: a filled shape would mask whatever is
-            // drawn under it. That is arguably WIPEOUT's real effect, but this
-            // renderer's simple in-order painting cannot be trusted to
-            // reproduce it, and an unexpectedly opaque box is a worse failure
-            // than a merely incomplete outline.
-            if w.boundary.len() < 2 {
-                ctx.unsupported.insert("WIPEOUT".to_string());
-                return None;
-            }
-            ctx.consider_all(&w.boundary);
-            Some(dashed_outline(&w.boundary, &color, "2,2", frame))
-        }
-        Entity::Spline(s) => {
-            let pts = spline::spline_points(s);
-            if pts.len() < 2 {
-                return None;
-            }
-            ctx.consider_all(&pts);
-            Some(polyline_element(&pts, false, &color, frame))
-        }
+        Entity::AcadTable(a) => draw_acad_table(a, e, &color, ctx),
+        Entity::Dimension(d) => draw_dimension(d, e, &color, ctx),
+        Entity::Viewport(v) => draw_viewport(v, &color, frame, ctx),
+        Entity::Wipeout(w) => draw_wipeout(w, &color, frame, ctx),
+        Entity::Spline(s) => draw_spline(s, &color, frame, ctx),
         Entity::Solid3D(s) => render_wireframe_entity(&s.wireframe_edges, s.common.id, &color, ctx),
         Entity::Region(r) => render_wireframe_entity(&r.wireframe_edges, r.common.id, &color, ctx),
         Entity::PolylinePFace(p) => {
@@ -2607,195 +2178,10 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         Entity::Hatch(h) => in_own_plane(h.extrusion, h.elevation, ctx, |ctx| {
             hatch::render_hatch(h, h.common.id, &color, ctx)
         }),
-        Entity::Leader(l) => {
-            if l.vertices.is_empty() {
-                return None;
-            }
-            // A spline path is fitted through the vertices by the program
-            // that draws it, and a path whose kind the file does not state
-            // could be either: neither is a curve this renderer can draw.
-            if l.path_type != Some(LeaderPath::Straight) {
-                ctx.undefined_leaders.insert(l.common.id);
-                return None;
-            }
-            ctx.consider_all_3d(&l.vertices);
-            let pts = xy(&l.vertices);
-            let line = polyline_element(&pts, false, &color, frame);
-            // A leader whose file does not state the flag draws none: an
-            // arrowhead is a claim about the drawing, and nothing made it.
-            let arrow = if l.has_arrowhead == Some(true) && pts.len() >= 2 {
-                let size = leader_arrow_size(l, ctx.tables).unwrap_or_else(|| {
-                    ctx.unsized_arrowheads.insert(l.common.id);
-                    DEFAULT_ARROWHEAD_SIZE
-                });
-                // An arrow size of 0 draws no arrowhead.
-                if size > 0.0 {
-                    arrowhead_element(&pts[0], &pts[1], size, &color, frame)
-                } else {
-                    String::new()
-                }
-            } else {
-                String::new()
-            };
-            Some(line + &arrow)
-        }
-        Entity::MultiLeader(m) => {
-            // What the model says is drawn: each line on to its root's last
-            // leader line point, and each dogleg from there. The arrowhead
-            // sits where a line starts, as a LEADER's does. Lines of no type
-            // are not drawn, arrowheads included; a spline, or a type the
-            // model does not know, is not a curve this renderer can draw.
-            let lines = match m.line_type {
-                Some(LeaderLineType::Straight) => m.drawn_lines(),
-                Some(LeaderLineType::Invisible) => Vec::new(),
-                Some(LeaderLineType::Spline) | None => {
-                    if !m.drawn_lines().is_empty() {
-                        ctx.undefined_leaders.insert(m.common.id);
-                    }
-                    Vec::new()
-                }
-            };
-            let mut parts = Vec::new();
-            for line in lines {
-                ctx.consider_all_3d(&line);
-                let pts = xy(&line);
-                parts.push(polyline_element(&pts, false, &color, frame));
-                let size = m.arrow_size.unwrap_or_else(|| {
-                    ctx.unsized_arrowheads.insert(m.common.id);
-                    DEFAULT_ARROWHEAD_SIZE
-                });
-                // An arrow size of 0 draws no arrowhead.
-                if size > 0.0 {
-                    parts.push(arrowhead_element(&pts[0], &pts[1], size, &color, frame));
-                }
-            }
-            for dogleg in m.doglegs() {
-                ctx.consider_all_3d(&dogleg);
-                parts.push(polyline_element(&xy(&dogleg), false, &color, frame));
-            }
-            // What the leaders point out, at the world location the record
-            // states: a text drawn as an MTEXT is, or a block placed as a
-            // block reference places it (its base point on the location).
-            match &m.content {
-                Some(MultiLeaderContent::MText(t)) => {
-                    // The text's x axis is the direction the record states;
-                    // its rotation field says the same thing as an angle, and
-                    // is what is left when the direction is not stated.
-                    let rotation = if t.direction.x != 0.0 || t.direction.y != 0.0 {
-                        t.direction.y.atan2(t.direction.x)
-                    } else {
-                        t.rotation
-                    };
-                    let text = mtext_element(
-                        &MTextDrawn {
-                            id: m.common.id,
-                            text: &t.text,
-                            at: t.location,
-                            height: t.height,
-                            line_spacing_factor: t.line_spacing_factor,
-                            rotation,
-                            attachment: t.attachment,
-                            extents: (None, None),
-                            reference_width: t.width * t.scale,
-                        },
-                        &color,
-                        ctx,
-                    );
-                    parts.extend(text.filter(|t| !t.is_empty()));
-                }
-                Some(MultiLeaderContent::Block(b)) => {
-                    let base = b
-                        .block_name
-                        .resolved()
-                        .and_then(|name| ctx.tables.block_records.get(name))
-                        .map_or_else(Point3D::default, |block| block.base_point);
-                    let placement = Affine2::placement(
-                        Point2D {
-                            x: -base.x,
-                            y: -base.y,
-                        },
-                        1.0,
-                        1.0,
-                        0.0,
-                    )
-                    .then(&Affine2::placement(
-                        Point2D {
-                            x: b.location.x,
-                            y: b.location.y,
-                        },
-                        b.scale.x,
-                        b.scale.y,
-                        b.rotation,
-                    ));
-                    let svg = render_block_ref(e, &b.block_name, placement, &color, ctx);
-                    if !svg.is_empty() {
-                        parts.push(svg);
-                    }
-                }
-                None => {}
-            }
-            (!parts.is_empty()).then(|| parts.join("\n  "))
-        }
-        Entity::MLine(l) => {
-            if l.vertices.is_empty() {
-                return None;
-            }
-            for v in &l.vertices {
-                ctx.consider(v.point.x, v.point.y);
-            }
-            // A single 0.0 offset is exactly the centerline-only fallback:
-            // point + miter_direction * 0.0 is just point.
-            let offsets = match l
-                .mlinestyle_name
-                .resolved()
-                .and_then(|n| ctx.tables.mlinestyles.get(n))
-            {
-                Some(offsets) if !offsets.is_empty() => offsets.clone(),
-                _ => vec![0.0],
-            };
-            // The style's offsets are in the style's units; the MLINE's own
-            // scale (DXF 40) is what puts them in drawing units -- a wall
-            // 200 thick is the +-0.5 STANDARD style at scale 200. A model
-            // not given the scale draws the style's own offsets: the
-            // renderer's choice, the model states none.
-            let scale = l.scale.unwrap_or(1.0);
-            let lines: Vec<String> = offsets
-                .iter()
-                .map(|&offset| {
-                    let points = mline_offset_points(&l.vertices, offset * scale);
-                    // The offset lines are what is drawn, so they are what
-                    // the extent covers, not the centerline alone.
-                    ctx.consider_all(&points);
-                    polyline_element(&points, l.closed, &color, frame)
-                })
-                .collect();
-            Some(lines.join("\n  "))
-        }
-        Entity::Light(l) => {
-            ctx.consider(l.position.x, l.position.y);
-            let marker = format!(
-                "<circle cx=\"{}\" cy=\"{}\" r=\"0.5\" fill=\"none\" stroke=\"{color}\"/>",
-                frame.x(l.position.x),
-                frame.y(l.position.y)
-            );
-            // Distant and spot lights aim at their target; a point light,
-            // or a light whose file does not say what kind it is, gets the
-            // marker alone rather than a direction nobody stated.
-            let aims = matches!(l.light_type, Some(LightType::Distant | LightType::Spot))
-                && l.target != l.position;
-            if !aims {
-                return Some(marker);
-            }
-            ctx.consider(l.target.x, l.target.y);
-            let line = format!(
-                "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke-dasharray=\"1,1\" stroke=\"{color}\"/>",
-                frame.x(l.position.x),
-                frame.y(l.position.y),
-                frame.x(l.target.x),
-                frame.y(l.target.y)
-            );
-            Some(format!("{marker}\n  {line}"))
-        }
+        Entity::Leader(l) => draw_leader(l, &color, frame, ctx),
+        Entity::MultiLeader(m) => draw_multi_leader(m, e, &color, frame, ctx),
+        Entity::MLine(l) => draw_mline(l, &color, frame, ctx),
+        Entity::Light(l) => draw_light(l, &color, frame, ctx),
         // Reaching here means an ATTDEF outside a block reference -- a
         // template with no instance, so there is nothing to draw.
         Entity::Attdef(_) => {
@@ -2805,20 +2191,825 @@ fn draw_entity(e: &Entity, ctx: &mut Ctx) -> Option<String> {
         // The raster file is not part of the drawing: what is drawn is where
         // the image sits, as a dashed outline like a WIPEOUT's. An outline
         // that encloses nothing (no size, no vectors) is reported instead.
-        Entity::Image(i) => {
-            let outline = image_outline(i);
-            if enclosed_area(&outline) == 0.0 {
-                ctx.unsupported.insert("IMAGE".to_string());
-                return None;
-            }
-            ctx.consider_all(&outline);
-            Some(dashed_outline(&outline, &color, "2,2", frame))
-        }
+        Entity::Image(i) => draw_image(i, &color, frame, ctx),
         Entity::Unknown { type_name, .. } => {
             ctx.unsupported.insert(type_name.clone());
             None
         }
     }
+}
+
+/// The SVG element for one Line entity (or `None` when it draws nothing).
+fn draw_line(
+    l: &uncad_model::model::LineEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    ctx.consider(l.start_point.x, l.start_point.y);
+    ctx.consider(l.end_point.x, l.end_point.y);
+    Some(format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{color}\"/>",
+        frame.x(l.start_point.x),
+        frame.y(l.start_point.y),
+        frame.x(l.end_point.x),
+        frame.y(l.end_point.y)
+    ))
+}
+
+/// The SVG element for one Arc entity (or `None` when it draws nothing).
+fn draw_arc(a: &uncad_model::model::ArcEntity, color: &str, ctx: &mut Ctx) -> Option<String> {
+    let Some(sweep) = a.sweep() else {
+        // Equal angles: the file does not say whether this is the
+        // whole circle or nothing, so neither is drawn.
+        ctx.undefined_arcs.insert(a.common.id);
+        return None;
+    };
+    if !own_plane(a.extrusion).is_world() {
+        return Some(arc_in_own_plane(a, sweep, color, ctx));
+    }
+    Some(world_arc(a, sweep, color, ctx))
+}
+
+/// The SVG element for one Circle entity (or `None` when it draws nothing).
+fn draw_circle(
+    c: &uncad_model::model::CircleEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    ctx.consider_box(&Box2D {
+        min_x: c.center.x - c.radius,
+        max_x: c.center.x + c.radius,
+        min_y: c.center.y - c.radius,
+        max_y: c.center.y + c.radius,
+    });
+    Some(format!(
+        "<circle cx=\"{}\" cy=\"{}\" r=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
+        frame.x(c.center.x),
+        frame.y(c.center.y),
+        clean(c.radius)
+    ))
+}
+
+/// The SVG element for one Ellipse entity (or `None` when it draws nothing).
+fn draw_ellipse(
+    el: &uncad_model::model::EllipseEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    let rx = el.major_axis_endpoint.x.hypot(el.major_axis_endpoint.y);
+    let ry = rx * el.axis_ratio;
+    let theta = el.major_axis_endpoint.y.atan2(el.major_axis_endpoint.x);
+    let rot = theta.to_degrees();
+    let (cx, cy) = (frame.x(el.center.x), frame.y(el.center.y));
+    let sweep = el.sweep();
+    if sweep >= std::f64::consts::TAU {
+        // The box of the ellipse this element draws: semi-axes rx
+        // and ry turned by the major axis's angle.
+        let (cos, sin) = (theta.cos(), theta.sin());
+        let hx = (rx * cos).hypot(ry * sin);
+        let hy = (rx * sin).hypot(ry * cos);
+        ctx.consider_box(&Box2D {
+            min_x: el.center.x - hx,
+            max_x: el.center.x + hx,
+            min_y: el.center.y - hy,
+            max_y: el.center.y + hy,
+        });
+        let (rx, ry) = (clean(rx), clean(ry.abs()));
+        return Some(format!(
+            "<ellipse cx=\"{cx}\" cy=\"{cy}\" rx=\"{rx}\" ry=\"{ry}\" transform=\"rotate({} {cx} {cy})\" fill=\"none\" stroke=\"{color}\"/>",
+            neg(rot)
+        ));
+    }
+    let e = el.extrusion;
+    // Files write the Z axis with rounding noise in the other two
+    // components; a plane that far from level is still level.
+    let flat = e.x.abs().max(e.y.abs()) <= 1e-9 * e.z.abs();
+    if !flat {
+        // A tilted plane: its outline seen from above is not an
+        // ellipse with these axes, so it is drawn through points.
+        let points: Vec<Point2D> = (0..=ELLIPSE_SAMPLES)
+            .map(|i| {
+                ellipse_point(
+                    el,
+                    el.start_angle + sweep * (i as f64 / ELLIPSE_SAMPLES as f64),
+                )
+            })
+            .collect();
+        ctx.consider_all(&points);
+        return Some(polyline_element(&points, false, color, frame));
+    }
+    // The arc's own extent, not the whole ellipse's.
+    ctx.consider_box(&ellipse_arc_extent(el));
+    let (rx, ry) = (clean(rx), clean(ry.abs()));
+    // A partial ellipse: the same exact arc command ARC uses, with
+    // the axes and rotation of the ellipse. Counter-clockwise in the
+    // drawing is clockwise once y is flipped, hence sweep-flag 0 --
+    // and 1 for a mirrored ellipse, whose parameters run clockwise.
+    let p1 = ellipse_point(el, el.start_angle);
+    let p2 = ellipse_point(el, el.start_angle + sweep);
+    let large = if sweep > std::f64::consts::PI { 1 } else { 0 };
+    let sweep_flag = if e.z < 0.0 { 1 } else { 0 };
+    Some(format!(
+        "<path d=\"M {} {} A {rx} {ry} {} {large} {sweep_flag} {} {}\" fill=\"none\" stroke=\"{color}\"/>",
+        frame.x(p1.x),
+        frame.y(p1.y),
+        neg(rot),
+        frame.x(p2.x),
+        frame.y(p2.y)
+    ))
+}
+
+/// The SVG element for one LwPolyline / Polyline2D entity (or `None` when it draws nothing).
+fn draw_lw_polyline(
+    p: &uncad_model::model::LwPolylineEntity,
+    color: &str,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    let plane = own_plane(p.extrusion);
+    if plane.is_world() {
+        return Some(polyline_drawn(&p.vertices, p.closed, color, ctx));
+    }
+    if plane.is_flat() {
+        // A mirror copy: its vertices taken to the world, and every
+        // arc turning the other way there.
+        let world: Vec<PolylineVertex> = p
+            .vertices
+            .iter()
+            .map(|v| PolylineVertex {
+                point: seen_from_above(
+                    plane,
+                    Point3D {
+                        x: v.point.x,
+                        y: v.point.y,
+                        z: p.elevation,
+                    },
+                ),
+                bulge: -v.bulge,
+                ..*v
+            })
+            .collect();
+        return Some(polyline_drawn(&world, p.closed, color, ctx));
+    }
+    Some(polyline_on_tilted_plane(p, plane, color, ctx))
+}
+
+/// The SVG element for one Text entity (or `None` when it draws nothing).
+fn draw_text(
+    t: &uncad_model::model::TextEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    let layout = TextLayout::new(
+        justify::anchor(
+            t.start_point,
+            t.alignment_point,
+            t.horizontal_justification,
+            t.vertical_justification,
+            ctx.descender(),
+        ),
+        effective_text_height(t.text_height),
+        t.rotation,
+        t.oblique_angle,
+        t.width_factor,
+    )
+    .in_plane(own_plane(t.extrusion), t.elevation);
+    let text = text_codes::decode(&t.text, false);
+    let estimate = justify::consider_text_box(&layout, &text, ctx);
+    let id = ctx.record_text(t.common.id, &text, estimate);
+    Some(justify::text_element(
+        &id,
+        &layout,
+        color,
+        &text,
+        frame,
+        ctx.cap_height,
+    ))
+}
+
+/// The SVG element for one Attrib entity (or `None` when it draws nothing).
+fn draw_attrib(
+    a: &uncad_model::model::AttribEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    let layout = TextLayout::new(
+        justify::anchor(
+            a.start_point,
+            a.alignment_point,
+            a.horizontal_justification,
+            a.vertical_justification,
+            ctx.descender(),
+        ),
+        effective_text_height(a.text_height),
+        a.rotation,
+        a.oblique_angle,
+        a.width_factor,
+    )
+    .in_plane(own_plane(a.extrusion), a.elevation);
+    if a.text.is_empty() {
+        ctx.consider(layout.anchor.at.x, layout.anchor.at.y);
+        return Some(String::new());
+    }
+    let text = text_codes::decode(&a.text, false);
+    let estimate = justify::consider_text_box(&layout, &text, ctx);
+    let id = ctx.record_text(a.common.id, &text, estimate);
+    Some(justify::text_element(
+        &id,
+        &layout,
+        color,
+        &text,
+        frame,
+        ctx.cap_height,
+    ))
+}
+
+/// The SVG element for one Tolerance entity (or `None` when it draws nothing).
+fn draw_tolerance(
+    t: &uncad_model::model::ToleranceEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    ctx.consider(t.insertion_point.x, t.insertion_point.y);
+    if t.text_value.is_empty() {
+        return Some(String::new());
+    }
+    // A frame whose file never stated a height still has to be drawn
+    // at some size -- the renderer's choice, which is why the model
+    // does not make it: the text height (DIMTXT) of the dimension
+    // style the frame names, and 1 when that states none either.
+    let positive = |h: f64| (h.is_finite() && h > 0.0).then_some(h);
+    let height = t
+        .text_height
+        .and_then(positive)
+        .or_else(|| {
+            t.style_name
+                .resolved()
+                .and_then(|name| ctx.tables.dim_styles.get(name))
+                .and_then(|style| style.text_height)
+                .and_then(positive)
+        })
+        .unwrap_or(1.0);
+    let layout = TextLayout::new(
+        Anchor {
+            at: Point2D {
+                x: t.insertion_point.x,
+                y: t.insertion_point.y,
+            },
+            anchor: "start",
+            drop: 0.0,
+        },
+        height,
+        0.0,
+        0.0,
+        1.0,
+    );
+    // Its box is not counted towards the extent (the insertion
+    // point is), but it is estimated like any text's.
+    // A frame's text is written in MTEXT codes: `{\Fgdt;j}` picks
+    // the symbol font for the letter after it (fonts are not drawn,
+    // so the letter is). What `%%v` stands for in a frame is not a
+    // code this renderer knows, so it stays as written.
+    let text = text_codes::decode(&t.text_value, true);
+    let estimate = justify::estimate_text_box(&layout, &text, ctx);
+    let id = ctx.record_text(t.common.id, &text, estimate);
+    Some(justify::text_element(
+        &id,
+        &layout,
+        color,
+        &text,
+        frame,
+        ctx.cap_height,
+    ))
+}
+
+/// The SVG element for one MText entity (or `None` when it draws nothing).
+fn draw_mtext(m: &uncad_model::model::MTextEntity, color: &str, ctx: &mut Ctx) -> Option<String> {
+    mtext_element(
+        &MTextDrawn {
+            id: m.common.id,
+            text: &m.text,
+            at: m.insertion_point,
+            height: m.text_height,
+            line_spacing_factor: m.line_spacing_factor,
+            rotation: m.rotation,
+            attachment: m.attachment,
+            extents: (m.extents_width, m.extents_height),
+            reference_width: m.reference_width,
+        },
+        color,
+        ctx,
+    )
+}
+
+/// The SVG element for one Point entity (or `None` when it draws nothing).
+fn draw_point(
+    p: &uncad_model::model::PointEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    ctx.consider(p.position.x, p.position.y);
+    Some(point_element(
+        Point2D {
+            x: p.position.x,
+            y: p.position.y,
+        },
+        ctx.point_display,
+        color,
+        frame,
+        ctx.scale,
+    ))
+}
+
+/// The SVG element for one Solid / Trace entity (or `None` when it draws nothing).
+fn draw_solid(
+    s: &uncad_model::model::SolidEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // Classic AutoCAD SOLID/TRACE vertex order is 1-2-4-3, not 1-2-3-4.
+    let mut pts = [s.corner1, s.corner2, s.corner4, s.corner3];
+    let plane = own_plane(s.extrusion);
+    if !plane.is_world() {
+        // Written in its own plane: each corner taken to the world.
+        // A quadrilateral of straight edges stays one seen from
+        // above, so this is exact on a tilted plane too.
+        for p in &mut pts {
+            *p = seen_from_above(
+                plane,
+                Point3D {
+                    x: p.x,
+                    y: p.y,
+                    z: s.elevation,
+                },
+            );
+        }
+    }
+    ctx.consider_all(&pts);
+    Some(format!(
+        "<polygon points=\"{}\" fill=\"{color}\" fill-opacity=\"0.6\" stroke=\"none\"/>",
+        frame.points(&pts)
+    ))
+}
+
+/// The SVG element for one Face3D entity (or `None` when it draws nothing).
+fn draw_face3d(
+    f: &uncad_model::model::Face3DEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // Unlike SOLID, 3DFACE's 4 corners are already sequential.
+    let pts = xy(&[f.corner1, f.corner2, f.corner3, f.corner4]);
+    ctx.consider_all(&pts);
+    if f.invisible_edges.iter().all(|hidden| !hidden) {
+        return Some(format!(
+            "<polygon points=\"{}\" fill=\"none\" stroke=\"{color}\"/>",
+            frame.points(&pts)
+        ));
+    }
+    // Only the edges the file does not hide: a mesh of faces shows
+    // its outline, not the edges its faces share.
+    let mut d = String::new();
+    for (i, hidden) in f.invisible_edges.iter().enumerate() {
+        if *hidden {
+            continue;
+        }
+        let (a, b) = (pts[i], pts[(i + 1) % 4]);
+        if !d.is_empty() {
+            d.push(' ');
+        }
+        let _ = write!(
+            d,
+            "M {} {} L {} {}",
+            frame.x(a.x),
+            frame.y(a.y),
+            frame.x(b.x),
+            frame.y(b.y)
+        );
+    }
+    if d.is_empty() {
+        return Some(String::new());
+    }
+    Some(format!(
+        "<path d=\"{d}\" fill=\"none\" stroke=\"{color}\"/>"
+    ))
+}
+
+/// The SVG element for one Ray / XLine entity (or `None` when it draws nothing).
+fn draw_ray(
+    r: &uncad_model::model::RayEntity,
+    e: &Entity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // A construction line has no end, so only its base point counts
+    // towards the extent: a viewBox that had to contain the line
+    // would show nothing else. Where the line stops is the edge of
+    // the picture, known only once every entity has been walked, so
+    // the element is a placeholder cut to the viewBox at the end
+    // (see [`infinite`]).
+    ctx.consider(r.point.x, r.point.y);
+    // The direction in the element's own frame: y flipped, like
+    // every coordinate written here.
+    let (dx, dy) = (r.vector.x, -r.vector.y);
+    let len = dx.hypot(dy);
+    if !(len.is_finite() && len > 0.0) {
+        // No direction in plan: nothing to draw.
+        return None;
+    }
+    Some(infinite::placeholder(
+        &infinite::InfiniteLine {
+            matrix: ctx.svg_matrix,
+            base: (frame.x(r.point.x), frame.y(r.point.y)),
+            dir: (dx / len, dy / len),
+            both_ways: matches!(e, Entity::XLine(_)),
+        },
+        color,
+    ))
+}
+
+/// The SVG element for one Insert entity (or `None` when it draws nothing).
+fn draw_insert(
+    i: &uncad_model::model::InsertEntity,
+    e: &Entity,
+    color: &str,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // In a plane parallel to the world's -- the world's own, or a
+    // mirror copy's -- the model places the block exactly. A tilted
+    // plane has no exact 2D placement: the block is placed in its
+    // plane and that plane seen from above, as a HATCH is.
+    // The block's base point lands on the insertion point.
+    let base = i
+        .block_name
+        .resolved()
+        .and_then(|name| ctx.tables.block_records.get(name))
+        .map_or_else(Point3D::default, |block| block.base_point);
+    let placement = i.world_transform(base).unwrap_or_else(|| {
+        i.transform(base).then(&plane_seen_from_above(
+            own_plane(i.extrusion),
+            i.insertion_point.z,
+        ))
+    });
+    Some(render_block_ref(e, &i.block_name, placement, color, ctx))
+}
+
+/// A table's block is placed as though based at the origin: the
+/// block's base point is not applied here, unlike a block
+/// reference's. Every table block seen so far is based there.
+fn draw_acad_table(
+    a: &uncad_model::model::AcadTableEntity,
+    e: &Entity,
+    color: &str,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    Some(render_block_ref(
+        e,
+        &a.block_name,
+        Affine2::placement(
+            Point2D {
+                x: a.insertion_point.x,
+                y: a.insertion_point.y,
+            },
+            a.scale.x,
+            a.scale.y,
+            a.rotation,
+        ),
+        color,
+        ctx,
+    ))
+}
+
+/// The SVG element for one Dimension entity (or `None` when it draws nothing).
+fn draw_dimension(
+    d: &uncad_model::model::DimensionEntity,
+    e: &Entity,
+    color: &str,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // The cached geometry block is already in final world coordinates,
+    // so it is drawn with an identity transform -- which is also what
+    // keeps its interior in the render's own frame (see
+    // [`render_block_ref`]).
+    let svg = render_block_ref(e, &d.block_name, Affine2::IDENTITY, color, ctx);
+    if svg.is_empty() {
+        ctx.unsupported.insert("DIMENSION".to_string());
+        return None;
+    }
+    Some(svg)
+}
+
+/// The SVG element for one Viewport entity (or `None` when it draws nothing).
+fn draw_viewport(
+    v: &uncad_model::model::ViewportEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // Not real drawing geometry (it is a window onto model space), but
+    // drawing its frame is a reasonable, honest representation.
+    let (cx, cy) = (v.center.x, v.center.y);
+    let (hw, hh) = (v.width / 2.0, v.height / 2.0);
+    let corners = [
+        Point2D {
+            x: cx - hw,
+            y: cy - hh,
+        },
+        Point2D {
+            x: cx + hw,
+            y: cy - hh,
+        },
+        Point2D {
+            x: cx + hw,
+            y: cy + hh,
+        },
+        Point2D {
+            x: cx - hw,
+            y: cy + hh,
+        },
+    ];
+    ctx.consider_all(&corners);
+    Some(dashed_outline(&corners, color, "2,2", frame))
+}
+
+/// The SVG element for one Wipeout entity (or `None` when it draws nothing).
+fn draw_wipeout(
+    w: &uncad_model::model::WipeoutEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // Outline only, not filled: a filled shape would mask whatever is
+    // drawn under it. That is arguably WIPEOUT's real effect, but this
+    // renderer's simple in-order painting cannot be trusted to
+    // reproduce it, and an unexpectedly opaque box is a worse failure
+    // than a merely incomplete outline.
+    if w.boundary.len() < 2 {
+        ctx.unsupported.insert("WIPEOUT".to_string());
+        return None;
+    }
+    ctx.consider_all(&w.boundary);
+    Some(dashed_outline(&w.boundary, color, "2,2", frame))
+}
+
+/// The SVG element for one Spline entity (or `None` when it draws nothing).
+fn draw_spline(
+    s: &uncad_model::model::SplineEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    let pts = spline::spline_points(s);
+    if pts.len() < 2 {
+        return None;
+    }
+    ctx.consider_all(&pts);
+    Some(polyline_element(&pts, false, color, frame))
+}
+
+/// The SVG element for one Leader entity (or `None` when it draws nothing).
+fn draw_leader(
+    l: &uncad_model::model::LeaderEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    if l.vertices.is_empty() {
+        return None;
+    }
+    // A spline path is fitted through the vertices by the program
+    // that draws it, and a path whose kind the file does not state
+    // could be either: neither is a curve this renderer can draw.
+    if l.path_type != Some(LeaderPath::Straight) {
+        ctx.undefined_leaders.insert(l.common.id);
+        return None;
+    }
+    ctx.consider_all_3d(&l.vertices);
+    let pts = xy(&l.vertices);
+    let line = polyline_element(&pts, false, color, frame);
+    // A leader whose file does not state the flag draws none: an
+    // arrowhead is a claim about the drawing, and nothing made it.
+    let arrow = if l.has_arrowhead == Some(true) && pts.len() >= 2 {
+        let size = leader_arrow_size(l, ctx.tables).unwrap_or_else(|| {
+            ctx.unsized_arrowheads.insert(l.common.id);
+            DEFAULT_ARROWHEAD_SIZE
+        });
+        // An arrow size of 0 draws no arrowhead.
+        if size > 0.0 {
+            arrowhead_element(&pts[0], &pts[1], size, color, frame)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+    Some(line + &arrow)
+}
+
+/// The SVG element for one MultiLeader entity (or `None` when it draws nothing).
+fn draw_multi_leader(
+    m: &uncad_model::model::MultiLeaderEntity,
+    e: &Entity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    // What the model says is drawn: each line on to its root's last
+    // leader line point, and each dogleg from there. The arrowhead
+    // sits where a line starts, as a LEADER's does. Lines of no type
+    // are not drawn, arrowheads included; a spline, or a type the
+    // model does not know, is not a curve this renderer can draw.
+    let lines = match m.line_type {
+        Some(LeaderLineType::Straight) => m.drawn_lines(),
+        Some(LeaderLineType::Invisible) => Vec::new(),
+        Some(LeaderLineType::Spline) | None => {
+            if !m.drawn_lines().is_empty() {
+                ctx.undefined_leaders.insert(m.common.id);
+            }
+            Vec::new()
+        }
+    };
+    let mut parts = Vec::new();
+    for line in lines {
+        ctx.consider_all_3d(&line);
+        let pts = xy(&line);
+        parts.push(polyline_element(&pts, false, color, frame));
+        let size = m.arrow_size.unwrap_or_else(|| {
+            ctx.unsized_arrowheads.insert(m.common.id);
+            DEFAULT_ARROWHEAD_SIZE
+        });
+        // An arrow size of 0 draws no arrowhead.
+        if size > 0.0 {
+            parts.push(arrowhead_element(&pts[0], &pts[1], size, color, frame));
+        }
+    }
+    for dogleg in m.doglegs() {
+        ctx.consider_all_3d(&dogleg);
+        parts.push(polyline_element(&xy(&dogleg), false, color, frame));
+    }
+    // What the leaders point out, at the world location the record
+    // states: a text drawn as an MTEXT is, or a block placed as a
+    // block reference places it (its base point on the location).
+    match &m.content {
+        Some(MultiLeaderContent::MText(t)) => {
+            // The text's x axis is the direction the record states;
+            // its rotation field says the same thing as an angle, and
+            // is what is left when the direction is not stated.
+            let rotation = if t.direction.x != 0.0 || t.direction.y != 0.0 {
+                t.direction.y.atan2(t.direction.x)
+            } else {
+                t.rotation
+            };
+            let text = mtext_element(
+                &MTextDrawn {
+                    id: m.common.id,
+                    text: &t.text,
+                    at: t.location,
+                    height: t.height,
+                    line_spacing_factor: t.line_spacing_factor,
+                    rotation,
+                    attachment: t.attachment,
+                    extents: (None, None),
+                    reference_width: t.width * t.scale,
+                },
+                color,
+                ctx,
+            );
+            parts.extend(text.filter(|t| !t.is_empty()));
+        }
+        Some(MultiLeaderContent::Block(b)) => {
+            let base = b
+                .block_name
+                .resolved()
+                .and_then(|name| ctx.tables.block_records.get(name))
+                .map_or_else(Point3D::default, |block| block.base_point);
+            let placement = Affine2::placement(
+                Point2D {
+                    x: -base.x,
+                    y: -base.y,
+                },
+                1.0,
+                1.0,
+                0.0,
+            )
+            .then(&Affine2::placement(
+                Point2D {
+                    x: b.location.x,
+                    y: b.location.y,
+                },
+                b.scale.x,
+                b.scale.y,
+                b.rotation,
+            ));
+            let svg = render_block_ref(e, &b.block_name, placement, color, ctx);
+            if !svg.is_empty() {
+                parts.push(svg);
+            }
+        }
+        None => {}
+    }
+    (!parts.is_empty()).then(|| parts.join("\n  "))
+}
+
+/// The SVG element for one MLine entity (or `None` when it draws nothing).
+fn draw_mline(
+    l: &uncad_model::model::MLineEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    if l.vertices.is_empty() {
+        return None;
+    }
+    for v in &l.vertices {
+        ctx.consider(v.point.x, v.point.y);
+    }
+    // A single 0.0 offset is exactly the centerline-only fallback:
+    // point + miter_direction * 0.0 is just point.
+    let offsets = match l
+        .mlinestyle_name
+        .resolved()
+        .and_then(|n| ctx.tables.mlinestyles.get(n))
+    {
+        Some(offsets) if !offsets.is_empty() => offsets.clone(),
+        _ => vec![0.0],
+    };
+    // The style's offsets are in the style's units; the MLINE's own
+    // scale (DXF 40) is what puts them in drawing units -- a wall
+    // 200 thick is the +-0.5 STANDARD style at scale 200. A model
+    // not given the scale draws the style's own offsets: the
+    // renderer's choice, the model states none.
+    let scale = l.scale.unwrap_or(1.0);
+    let lines: Vec<String> = offsets
+        .iter()
+        .map(|&offset| {
+            let points = mline_offset_points(&l.vertices, offset * scale);
+            // The offset lines are what is drawn, so they are what
+            // the extent covers, not the centerline alone.
+            ctx.consider_all(&points);
+            polyline_element(&points, l.closed, color, frame)
+        })
+        .collect();
+    Some(lines.join("\n  "))
+}
+
+/// The SVG element for one Light entity (or `None` when it draws nothing).
+fn draw_light(
+    l: &uncad_model::model::LightEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    ctx.consider(l.position.x, l.position.y);
+    let marker = format!(
+        "<circle cx=\"{}\" cy=\"{}\" r=\"0.5\" fill=\"none\" stroke=\"{color}\"/>",
+        frame.x(l.position.x),
+        frame.y(l.position.y)
+    );
+    // Distant and spot lights aim at their target; a point light,
+    // or a light whose file does not say what kind it is, gets the
+    // marker alone rather than a direction nobody stated.
+    let aims = matches!(l.light_type, Some(LightType::Distant | LightType::Spot))
+        && l.target != l.position;
+    if !aims {
+        return Some(marker);
+    }
+    ctx.consider(l.target.x, l.target.y);
+    let line = format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke-dasharray=\"1,1\" stroke=\"{color}\"/>",
+        frame.x(l.position.x),
+        frame.y(l.position.y),
+        frame.x(l.target.x),
+        frame.y(l.target.y)
+    );
+    Some(format!("{marker}\n  {line}"))
+}
+
+/// The raster file is not part of the drawing: what is drawn is where
+/// the image sits, as a dashed outline like a WIPEOUT's. An outline
+/// that encloses nothing (no size, no vectors) is reported instead.
+fn draw_image(
+    i: &uncad_model::model::ImageEntity,
+    color: &str,
+    frame: Frame,
+    ctx: &mut Ctx,
+) -> Option<String> {
+    let outline = image_outline(i);
+    if enclosed_area(&outline) == 0.0 {
+        ctx.unsupported.insert("IMAGE".to_string());
+        return None;
+    }
+    ctx.consider_all(&outline);
+    Some(dashed_outline(&outline, color, "2,2", frame))
 }
 
 /// Whether a measured world box lies within [`MAX_WORLD_COORDINATE`] of the

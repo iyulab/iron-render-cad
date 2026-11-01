@@ -7,11 +7,16 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-02
+
 ### Changed
 
 - Built on `resvg` 0.49 (was 0.48). The 343 tests of this crate pass unchanged, and the golden drawings render
   to the same PNG bytes as before. Text anchored to its end or run right to left follows the new version's
   measurement of the text run, which the golden drawings do not exercise.
+
+- Built on `iron-diff-cad` 0.13.0 and `uncad-model` 0.11.0. The model's and the diff's types are part of this
+  crate's interface, so a program that uses this crate with either moves them to the new versions together.
 
 ## [0.14.0] - 2026-10-30
 

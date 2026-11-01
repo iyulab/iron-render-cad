@@ -31,7 +31,7 @@ iter_over_hash_type = "warn"
 uncad-model = "0.10.0"
 # SVG -> PNG. One crate rather than separate usvg / tiny-skia / fontdb: resvg
 # re-exports all three, which keeps them in lock step.
-resvg = "0.48"
+resvg = "0.49"
 # The change set an overlay draws. A version dependency, like the model.
 iron-diff-cad = "0.12.0"
 # The overlay's report serializes as JSON, the way the change set does.

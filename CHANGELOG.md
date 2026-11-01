@@ -7,6 +7,12 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- Built on `resvg` 0.49 (was 0.48). The 343 tests of this crate pass unchanged, and the golden drawings render
+  to the same PNG bytes as before. Text anchored to its end or run right to left follows the new version's
+  measurement of the text run, which the golden drawings do not exercise.
+
 ## [0.14.0] - 2026-10-30
 
 ### Changed

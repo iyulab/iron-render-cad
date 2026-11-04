@@ -176,8 +176,8 @@ fn a_balloon_that_cannot_be_drawn_is_reported_by_name() {
                 if map
                     .get("common")
                     .and_then(|c| c.get("id"))
-                    .and_then(Value::as_u64)
-                    == Some(290)
+                    .and_then(Value::as_str)
+                    == Some("290")
                 {
                     v["common"]["invisible"] = true.into();
                     return;

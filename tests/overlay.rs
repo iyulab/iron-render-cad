@@ -45,8 +45,8 @@ fn edit(v: &mut Value, id: u64, edit: &dyn Fn(&mut Value)) {
             let is_it = map
                 .get("common")
                 .and_then(|c| c.get("id"))
-                .and_then(Value::as_u64)
-                == Some(id);
+                .and_then(Value::as_str)
+                == Some(id.to_string().as_str());
             if is_it {
                 edit(v);
                 return;
@@ -76,8 +76,8 @@ fn remove(v: &mut Value, id: u64) {
             items.retain(|e| {
                 e.get("common")
                     .and_then(|c| c.get("id"))
-                    .and_then(Value::as_u64)
-                    != Some(id)
+                    .and_then(Value::as_str)
+                    != Some(id.to_string().as_str())
             });
             for child in items {
                 remove(child, id);
@@ -94,11 +94,11 @@ fn add_hole(v: &mut Value, id: u64) {
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["common"]["id"] == 291)
+        .find(|e| e["common"]["id"].as_str() == Some("291"))
         .unwrap()
         .clone();
     let mut hole = hole;
-    hole["common"]["id"] = id.into();
+    hole["common"]["id"] = id.to_string().into();
     hole["center"]["x"] = 100.0.into();
     v["entities"].as_array_mut().unwrap().push(hole.clone());
     v["tables"]["block_records"]["*Model_Space"]["entities"]
@@ -246,7 +246,7 @@ fn every_kind_of_change_is_marked_or_reported() {
     // Built from its wire form: a change set is a result of the differ, and
     // a consumer that holds one it did not compute has it as JSON.
     changes.changes.push(change(serde_json::json!({
-        "type": "UNKNOWN", "data": { "id": 291, "candidates": [292], "reason": "test" }
+        "type": "UNKNOWN", "data": { "id": "291", "candidates": ["292"], "reason": "test" }
     })));
     let overlay = overlay_to_svg(&before, &after, &changes, OverlayOptions::default());
 
@@ -346,7 +346,7 @@ fn a_change_inside_a_block_is_marked_where_its_reference_places_it() {
     assert_eq!(layer.matches("class=\"cloud\"").count(), 1);
     assert_eq!(layer.matches("<line").count(), 1, "the line, once: {layer}");
     let report = serde_json::to_value(mark).unwrap();
-    assert_eq!(report["via"], serde_json::json!([269]), "{report}");
+    assert_eq!(report["via"], serde_json::json!(["269"]), "{report}");
 }
 
 /// A block placed twice: one change, a mark at each place, each through
@@ -356,7 +356,7 @@ fn a_change_inside_a_block_placed_twice_is_marked_at_both_places() {
     let mut before_json = g2_json();
     // A second reference to `A`, 300 to the right.
     let mut second = before_json["entities"][0].clone();
-    second["common"]["id"] = 9001.into();
+    second["common"]["id"] = 9001.to_string().into();
     second["insertion_point"]["x"] = 400.0.into();
     before_json["entities"]
         .as_array_mut()
@@ -488,7 +488,7 @@ fn a_change_the_render_draws_nothing_for_is_reported() {
     let mut changes = diff(&before, &before, by_reference());
     changes.changes = vec![change(serde_json::json!({
         "type": "REMOVED",
-        "data": { "id": 9999, "entity_type": "LINE", "provenance": "VECTOR", "confidence": "HIGH" }
+        "data": { "id": "9999", "entity_type": "LINE", "provenance": "VECTOR", "confidence": "HIGH" }
     }))];
     let overlay = overlay_to_svg(&before, &before, &changes, OverlayOptions::default());
     assert!(overlay.marked.is_empty());

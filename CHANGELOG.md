@@ -7,6 +7,11 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** entity IDs are decimal strings in the change sets and models read, and in the reports
+  of the marks drawn (`"via": ["269"]`, not numbers), following `uncad-model`.
+
 ## [0.15.0] - 2026-11-02
 
 ### Changed

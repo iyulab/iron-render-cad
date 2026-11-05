@@ -7,10 +7,14 @@ bumps the minor version.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-11-05
+
 ### Changed
 
 - **Breaking:** entity IDs are decimal strings in the change sets and models read, and in the reports
   of the marks drawn (`"via": ["269"]`, not numbers), following `uncad-model`.
+
+- Built on `iron-diff-cad` 0.14.0 and `uncad-model` 0.12.0.
 
 ## [0.15.0] - 2026-11-02
 

@@ -301,165 +301,26 @@ pub fn overlay_to_svg(
     let b_parts = top_level(&b);
     let a_parts = top_level(&a);
 
-    let mut marked = Vec::new();
-    let mut not_marked = Vec::new();
-    // Parts to draw in the change layer, and the clouds (world box, dashed).
-    let mut drawn_after = BTreeSet::new();
-    let mut drawn_before = BTreeSet::new();
-    let mut clouds: Vec<(Rect, bool)> = Vec::new();
-    // Changes inside block definitions, drawn where each reference places
-    // them: the renders of the reduced states, and which parts to draw.
-    let mut placed_layers: Vec<PlacedLayer> = Vec::new();
-
+    let mut marks = Marks::default();
     for (entry, change) in changes.changes.iter().enumerate() {
-        let (kind, before_id, after_ids): (MarkKind, Option<EntityId>, Vec<EntityId>) = match change
-        {
-            Change::Added(e) => (MarkKind::Added, None, vec![e.id]),
-            Change::Removed(e) => (MarkKind::Removed, Some(e.id), Vec::new()),
-            Change::Modified(m) => (
-                MarkKind::Modified,
-                Some(m.id),
-                vec![m.counterpart.unwrap_or(m.id)],
-            ),
-            Change::Unknown(u) => (MarkKind::Unknown, Some(u.id), u.candidates.clone()),
-        };
-        let before_part = before_id.and_then(|id| b_parts.get(&id).copied());
-        let after_parts: Vec<usize> = after_ids
-            .iter()
-            .filter_map(|id| a_parts.get(id).copied())
-            .collect();
-        if before_part.is_none() && after_parts.is_empty() {
-            let after_id = after_ids.first().copied();
-            let placed = placements(
-                kind,
-                before_id.map(|id| (before, id)),
-                after_id.map(|id| (after, id)),
-                options.svg,
-            );
-            if placed.marks.is_empty() && placed.reached {
-                not_marked.push(NotMarked {
-                    entry,
-                    kind,
-                    id: change.id(),
-                    reason: NotMarkedReason::NothingDrawn,
-                });
-                continue;
-            }
-            if !placed.marks.is_empty() {
-                for (via, cloud, drawn) in placed.marks {
-                    clouds.push((cloud, false));
-                    marked.push(Mark {
-                        entry,
-                        kind,
-                        before: before_id.filter(|_| kind != MarkKind::Added),
-                        after: after_id.filter(|_| drawn),
-                        cloud,
-                        not_drawn: None,
-                        via: vec![via],
-                        share: 0.0,
-                    });
-                }
-                placed_layers.extend(placed.layers);
-                continue;
-            }
-            not_marked.push(NotMarked {
-                entry,
-                kind,
-                id: change.id(),
-                reason: NotMarkedReason::NotTopLevel,
-            });
-            continue;
-        }
-
-        let before_extent = before_part.and_then(|i| drawn_extent(&b, i));
-        let after_extents: Vec<(usize, Rect)> = after_parts
-            .iter()
-            .filter_map(|&i| drawn_extent(&a, i).map(|r| (i, r)))
-            .collect();
-        let Some(cloud) = before_extent
-            .into_iter()
-            .chain(after_extents.iter().map(|&(_, r)| r))
-            .reduce(union)
-        else {
-            not_marked.push(NotMarked {
-                entry,
-                kind,
-                id: change.id(),
-                reason: NotMarkedReason::NothingDrawn,
-            });
-            continue;
-        };
-
-        let mut after = None;
-        let mut not_drawn = None;
-        match kind {
-            MarkKind::Added | MarkKind::Modified => {
-                if let Some(&(i, _)) = after_extents.first() {
-                    if block_out_of_date(change) {
-                        not_drawn = Some(NotDrawnReason::BlockOutOfDate);
-                    } else {
-                        drawn_after.insert(i);
-                        after = Some(a.parts[i].id);
-                    }
-                }
-            }
-            MarkKind::Removed => {
-                if let (Some(i), Some(_)) = (before_part, before_extent) {
-                    drawn_before.insert(i);
-                }
-            }
-            MarkKind::Unknown => {}
-        }
-        clouds.push((cloud, kind == MarkKind::Unknown));
-        marked.push(Mark {
+        marks.change(
             entry,
-            kind,
-            before: before_id.filter(|_| before_part.is_some()),
-            after,
-            cloud,
-            not_drawn,
-            via: Vec::new(),
-            share: 0.0,
-        });
+            change,
+            &Compared {
+                before: &b,
+                after: &a,
+                before_parts: &b_parts,
+                after_parts: &a_parts,
+                before_db: before,
+                after_db: after,
+            },
+            options.svg,
+        );
     }
 
-    // The window, and the stroke width that goes with it.
-    let changed = clouds.iter().map(|(r, _)| *r).reduce(union);
-    let (window, stroke_width) = match (options.frame, changed) {
-        (OverlayFrame::Changes, Some(changed)) => {
-            let window = around(changed, &b.view_box);
-            // The whole render's stroke for its view box, scaled to this
-            // one's: the lines keep the weight they have in the whole picture
-            // seen at the same size.
-            let ratio = b.auto_stroke_width / diagonal(&b.view_box);
-            let auto = if ratio.is_finite() && ratio > 0.0 {
-                diagonal(&window) * ratio
-            } else {
-                b.auto_stroke_width
-            };
-            let stroke_width = options.svg.stroke_width.unwrap_or(auto);
-            let margin = cloud_margin(stroke_width);
-            let window = clouds
-                .iter()
-                .map(|(r, _)| pad(*r, margin))
-                .fold(window, union);
-            (window, stroke_width)
-        }
-        _ => {
-            // The original's view box, grown to take in every cloud with its
-            // margin. Written exactly as the original render framed it when
-            // nothing grew it.
-            let stroke_width = options.svg.stroke_width.unwrap_or(b.auto_stroke_width);
-            let margin = cloud_margin(stroke_width);
-            let window = clouds
-                .iter()
-                .map(|(r, _)| pad(*r, margin))
-                .fold(b.view_box, union);
-            (window, stroke_width)
-        }
-    };
+    let (window, stroke_width) = frame_window(&options, &marks.clouds, &b);
     let longer = |r: &Rect| r.width().max(r.height());
-    for mark in &mut marked {
+    for mark in &mut marks.marked {
         let share = longer(&mark.cloud) / longer(&window);
         mark.share = if share.is_finite() { share } else { 0.0 };
     }
@@ -470,49 +331,7 @@ pub fn overlay_to_svg(
     };
 
     let original = b.layer(view_box, stroke_width, |i| b.in_document(i));
-    let mut layer = String::new();
-    if !drawn_after.is_empty() {
-        let after_view_box = doc_view_box(&window, a.origin);
-        let body = a.layer(after_view_box, stroke_width, |i| drawn_after.contains(&i));
-        // The second render is written about its own origin; move it onto
-        // the first's.
-        let dx = clean(a.origin.x - b.origin.x);
-        let dy = clean(b.origin.y - a.origin.y);
-        let _ = write!(
-            layer,
-            "\n  <g transform=\"translate({dx} {dy})\">\n  {body}\n  </g>"
-        );
-    }
-    if !drawn_before.is_empty() {
-        let body = b.layer(view_box, stroke_width, |i| drawn_before.contains(&i));
-        let _ = write!(layer, "\n  <g class=\"removed\">\n  {body}\n  </g>");
-    }
-    for placed in &placed_layers {
-        let scene = &placed.scene;
-        let body = scene.layer(doc_view_box(&window, scene.origin), stroke_width, |i| {
-            placed.parts.contains(&i)
-        });
-        let dx = clean(scene.origin.x - b.origin.x);
-        let dy = clean(b.origin.y - scene.origin.y);
-        let class = if placed.removed {
-            " class=\"removed\""
-        } else {
-            ""
-        };
-        let _ = write!(
-            layer,
-            "\n  <g{class} transform=\"translate({dx} {dy})\">\n  {body}\n  </g>"
-        );
-    }
-    for (rect, dashed) in &clouds {
-        let class = if *dashed { "cloud unknown" } else { "cloud" };
-        let d = cloud_path(
-            pad(*rect, cloud_margin(stroke_width)),
-            b.origin,
-            stroke_width,
-        );
-        let _ = write!(layer, "\n  <path class=\"{class}\" d=\"{d}\"/>");
-    }
+    let layer = marks.layer(&b, &a, &window, view_box, stroke_width);
 
     let [x, y, width, height] = view_box;
     let defs = b.defs_block(stroke_width);
@@ -547,14 +366,256 @@ pub fn overlay_to_svg(
 
     OverlayResult {
         svg: super::with_screen_stroke(svg, options.svg.screen_stroke),
-        marked,
-        not_marked,
+        marked: marks.marked,
+        not_marked: marks.not_marked,
         view_box: window,
         origin: b.origin,
         stroke_width,
         proposal_color: color,
         proposal_color_conflicts,
         left_out,
+    }
+}
+
+/// The two states an overlay compares: each rendered, the top-level parts of
+/// each by entity, and the model each came from.
+struct Compared<'a> {
+    before: &'a Scene,
+    after: &'a Scene,
+    before_parts: &'a BTreeMap<EntityId, usize>,
+    after_parts: &'a BTreeMap<EntityId, usize>,
+    before_db: &'a CadDatabase,
+    after_db: &'a CadDatabase,
+}
+
+/// What the changes of an overlay are drawn as, collected change by change.
+#[derive(Default)]
+struct Marks {
+    marked: Vec<Mark>,
+    not_marked: Vec<NotMarked>,
+    /// Parts of the second state to draw in the change layer, and parts of
+    /// the first state that were removed.
+    drawn_after: BTreeSet<usize>,
+    drawn_before: BTreeSet<usize>,
+    /// The clouds: a world box, dashed when the change is unknown.
+    clouds: Vec<(Rect, bool)>,
+    /// Changes inside block definitions, drawn where each reference places
+    /// them: the renders of the reduced states, and which parts to draw.
+    placed_layers: Vec<PlacedLayer>,
+}
+
+impl Marks {
+    /// Marks one change: the cloud around what it touches, and what of the
+    /// two states to draw in the change layer; or why it has no mark.
+    fn change(&mut self, entry: usize, change: &Change, c: &Compared<'_>, svg: ToSvgOptions) {
+        let (before, after) = (c.before_db, c.after_db);
+        let (kind, before_id, after_ids): (MarkKind, Option<EntityId>, Vec<EntityId>) = match change
+        {
+            Change::Added(e) => (MarkKind::Added, None, vec![e.id]),
+            Change::Removed(e) => (MarkKind::Removed, Some(e.id), Vec::new()),
+            Change::Modified(m) => (
+                MarkKind::Modified,
+                Some(m.id),
+                vec![m.counterpart.unwrap_or(m.id)],
+            ),
+            Change::Unknown(u) => (MarkKind::Unknown, Some(u.id), u.candidates.clone()),
+        };
+        let before_part = before_id.and_then(|id| c.before_parts.get(&id).copied());
+        let after_parts: Vec<usize> = after_ids
+            .iter()
+            .filter_map(|id| c.after_parts.get(id).copied())
+            .collect();
+        if before_part.is_none() && after_parts.is_empty() {
+            let after_id = after_ids.first().copied();
+            let placed = placements(
+                kind,
+                before_id.map(|id| (before, id)),
+                after_id.map(|id| (after, id)),
+                svg,
+            );
+            if placed.marks.is_empty() && placed.reached {
+                self.not_marked.push(NotMarked {
+                    entry,
+                    kind,
+                    id: change.id(),
+                    reason: NotMarkedReason::NothingDrawn,
+                });
+                return;
+            }
+            if !placed.marks.is_empty() {
+                for (via, cloud, drawn) in placed.marks {
+                    self.clouds.push((cloud, false));
+                    self.marked.push(Mark {
+                        entry,
+                        kind,
+                        before: before_id.filter(|_| kind != MarkKind::Added),
+                        after: after_id.filter(|_| drawn),
+                        cloud,
+                        not_drawn: None,
+                        via: vec![via],
+                        share: 0.0,
+                    });
+                }
+                self.placed_layers.extend(placed.layers);
+                return;
+            }
+            self.not_marked.push(NotMarked {
+                entry,
+                kind,
+                id: change.id(),
+                reason: NotMarkedReason::NotTopLevel,
+            });
+            return;
+        }
+
+        let before_extent = before_part.and_then(|i| drawn_extent(c.before, i));
+        let after_extents: Vec<(usize, Rect)> = after_parts
+            .iter()
+            .filter_map(|&i| drawn_extent(c.after, i).map(|r| (i, r)))
+            .collect();
+        let Some(cloud) = before_extent
+            .into_iter()
+            .chain(after_extents.iter().map(|&(_, r)| r))
+            .reduce(union)
+        else {
+            self.not_marked.push(NotMarked {
+                entry,
+                kind,
+                id: change.id(),
+                reason: NotMarkedReason::NothingDrawn,
+            });
+            return;
+        };
+
+        let mut after = None;
+        let mut not_drawn = None;
+        match kind {
+            MarkKind::Added | MarkKind::Modified => {
+                if let Some(&(i, _)) = after_extents.first() {
+                    if block_out_of_date(change) {
+                        not_drawn = Some(NotDrawnReason::BlockOutOfDate);
+                    } else {
+                        self.drawn_after.insert(i);
+                        after = Some(c.after.parts[i].id);
+                    }
+                }
+            }
+            MarkKind::Removed => {
+                if let (Some(i), Some(_)) = (before_part, before_extent) {
+                    self.drawn_before.insert(i);
+                }
+            }
+            MarkKind::Unknown => {}
+        }
+        self.clouds.push((cloud, kind == MarkKind::Unknown));
+        self.marked.push(Mark {
+            entry,
+            kind,
+            before: before_id.filter(|_| before_part.is_some()),
+            after,
+            cloud,
+            not_drawn,
+            via: Vec::new(),
+            share: 0.0,
+        });
+    }
+}
+
+/// The window the change layer frames and the stroke width that goes with it.
+fn frame_window(options: &OverlayOptions, clouds: &[(Rect, bool)], b: &Scene) -> (Rect, f64) {
+    let changed = clouds.iter().map(|(r, _)| *r).reduce(union);
+    match (options.frame, changed) {
+        (OverlayFrame::Changes, Some(changed)) => {
+            let window = around(changed, &b.view_box);
+            // The whole render's stroke for its view box, scaled to this
+            // one's: the lines keep the weight they have in the whole picture
+            // seen at the same size.
+            let ratio = b.auto_stroke_width / diagonal(&b.view_box);
+            let auto = if ratio.is_finite() && ratio > 0.0 {
+                diagonal(&window) * ratio
+            } else {
+                b.auto_stroke_width
+            };
+            let stroke_width = options.svg.stroke_width.unwrap_or(auto);
+            let margin = cloud_margin(stroke_width);
+            let window = clouds
+                .iter()
+                .map(|(r, _)| pad(*r, margin))
+                .fold(window, union);
+            (window, stroke_width)
+        }
+        _ => {
+            // The original's view box, grown to take in every cloud with its
+            // margin. Written exactly as the original render framed it when
+            // nothing grew it.
+            let stroke_width = options.svg.stroke_width.unwrap_or(b.auto_stroke_width);
+            let margin = cloud_margin(stroke_width);
+            let window = clouds
+                .iter()
+                .map(|(r, _)| pad(*r, margin))
+                .fold(b.view_box, union);
+            (window, stroke_width)
+        }
+    }
+}
+
+impl Marks {
+    /// The change layer's markup: what of the second state is drawn, what was
+    /// removed, what changed inside blocks, and the clouds.
+    fn layer(
+        &self,
+        b: &Scene,
+        a: &Scene,
+        window: &Rect,
+        view_box: [f64; 4],
+        stroke_width: f64,
+    ) -> String {
+        let mut layer = String::new();
+        if !self.drawn_after.is_empty() {
+            let after_view_box = doc_view_box(window, a.origin);
+            let body = a.layer(after_view_box, stroke_width, |i| {
+                self.drawn_after.contains(&i)
+            });
+            // The second render is written about its own origin; move it onto
+            // the first's.
+            let dx = clean(a.origin.x - b.origin.x);
+            let dy = clean(b.origin.y - a.origin.y);
+            let _ = write!(
+                layer,
+                "\n  <g transform=\"translate({dx} {dy})\">\n  {body}\n  </g>"
+            );
+        }
+        if !self.drawn_before.is_empty() {
+            let body = b.layer(view_box, stroke_width, |i| self.drawn_before.contains(&i));
+            let _ = write!(layer, "\n  <g class=\"removed\">\n  {body}\n  </g>");
+        }
+        for placed in &self.placed_layers {
+            let scene = &placed.scene;
+            let body = scene.layer(doc_view_box(window, scene.origin), stroke_width, |i| {
+                placed.parts.contains(&i)
+            });
+            let dx = clean(scene.origin.x - b.origin.x);
+            let dy = clean(b.origin.y - scene.origin.y);
+            let class = if placed.removed {
+                " class=\"removed\""
+            } else {
+                ""
+            };
+            let _ = write!(
+                layer,
+                "\n  <g{class} transform=\"translate({dx} {dy})\">\n  {body}\n  </g>"
+            );
+        }
+        for (rect, dashed) in &self.clouds {
+            let class = if *dashed { "cloud unknown" } else { "cloud" };
+            let d = cloud_path(
+                pad(*rect, cloud_margin(stroke_width)),
+                b.origin,
+                stroke_width,
+            );
+            let _ = write!(layer, "\n  <path class=\"{class}\" d=\"{d}\"/>");
+        }
+        layer
     }
 }
 

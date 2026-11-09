@@ -1,7 +1,8 @@
 //! The page a drawing is drawn on. On a light page (the default) pure white
 //! is drawn black; on a dark page pure white stays white, pure black is
 //! drawn white, and the document starts with a black rectangle covering its
-//! view. Every other color is what the file says on either page.
+//! view. A color too faint against a light page (yellow, cyan) is drawn
+//! darker there; every other color is what the file says on either page.
 
 mod common;
 
@@ -141,11 +142,15 @@ fn assert_page(element: &str, view_box: [f64; 4]) {
 }
 
 #[test]
-fn on_a_light_page_white_is_drawn_black_and_nothing_else_changes() {
+fn on_a_light_page_white_is_drawn_black_and_a_faint_color_is_darkened() {
     let svg = to_svg(&colors(), on(Paper::Light)).svg;
     assert_eq!(stroke_at(&svg, 0.0), "#000000");
     assert_eq!(stroke_at(&svg, 1.0), "#000000");
-    assert_eq!(stroke_at(&svg, 2.0), "#ffff00");
+    assert_eq!(
+        stroke_at(&svg, 2.0),
+        "#9a9a00",
+        "yellow, darkened to 3:1 against the white page"
+    );
     assert_eq!(stroke_at(&svg, 3.0), "#000000");
     assert_eq!(stroke_at(&svg, 4.0), "#000000");
     assert_eq!(stroke_at(&svg, 5.0), "#000000");

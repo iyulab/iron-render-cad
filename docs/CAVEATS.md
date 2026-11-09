@@ -259,7 +259,7 @@ a text string, and one is enough to make the whole SVG unparseable -- and with i
 which is rendered by parsing the SVG. The renderer writes U+FFFD in its place; the model
 keeps what the file said.
 
-## Colors: the page's own color becomes its opposite
+## Colors: the page's own color becomes its opposite, and faint colors are darkened
 
 A render is drawn on a page (`ToSvgOptions::paper`), white by default. ACI index 7
 (`0xFFFFFF`, "white/black") is AutoCAD's own auto-invert-by-background special case, and a
@@ -268,8 +268,28 @@ pure-white color is flipped to black -- otherwise it is silently invisible, whit
 On the black page (`Paper::Dark`) white stays white, as on a dark model space, and a resolved
 pure black -- a true color, the fallback of a BYBLOCK at the top level or of an unknown layer
 -- is drawn white instead. Applied at every color-producing path, not just literal index 7.
-No other color is adjusted on either page: a light color (yellow, cyan) on the white page,
-or a dark one on the black page, is drawn as the file says, however faint.
+
+On the white page a color that is faint against it is darkened as well. A drawing made for
+AutoCAD's dark model space routinely uses yellow, cyan, green or light gray, whose contrast
+against white is 1.1:1 to 1.8:1 -- the lines are there in the data and all but gone in the
+picture. Any resolved color whose WCAG 2 contrast ratio against white is below 3:1 (the
+WCAG threshold for graphical objects) is scaled toward black, the
+same ratio on every channel so that its hue is kept, by the largest ratio that reaches 3:1:
+ACI 2 `#ffff00` is drawn `#9a9a00`, ACI 3 `#00ff00` `#00ad00`, ACI 4 `#00ffff` `#00a5a5`, ACI 9
+`#c0c0c0` `#949494`. Of ACI 1-255, 63 colors are below 3:1 and are darkened; the others --
+red, blue, magenta, the mid grays, the dark shades -- are drawn exactly as the file says, and
+the page's own white is flipped to black as before. The darkened color is the entity's one
+drawn color: lines, text and fills (a hatch's solid or pattern fill, a gradient's first stop)
+take the same one, so a hatch and its boundary do not drift apart. The judgement uses a
+table of integers and integer arithmetic, not floating-point `pow`, so the drawn color is
+the same on every platform. `ToSvgResult::darkened` (and `ToPngResult::darkened`) counts
+the entities whose own color was darkened -- per entity and per block reference, as
+`hidden` counts; an entity that takes its block reference's color (BYBLOCK) is not counted
+again. A viewer that needs the file's literal colors on a light page cannot get them from
+this renderer: the file's color is in the model, and the drawn one is the renderer's
+statement of what stays legible on white. The black page has no such correction: a dark
+color on it is drawn as the file says, however faint, as on AutoCAD's own dark model space.
+An overlay's proposal color is chosen against the colors drawn, the darkened ones included.
 
 The white page has no background of its own in the SVG. A PNG of it is drawn on opaque white
 by default (`Background::White`), so a viewer that shows it on a dark page does not lose the

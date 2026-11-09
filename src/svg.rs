@@ -54,7 +54,7 @@ pub(crate) use sheet::render_layout;
 pub use sheet::{LayoutError, SheetSource, ViewportReport};
 pub use visibility::Hidden;
 
-use crate::color::{effective_layer, resolve_color, Paper, DEFAULT_COLOR};
+use crate::color::{effective_layer, resolve_color_noted, Paper, DEFAULT_COLOR};
 use crate::limits::{
     Cap, LimitReport, MAX_BLOCK_REFS, MAX_BLOCK_REF_DEPTH, MAX_ENTITY_POINTS, MAX_ENTITY_SVG_BYTES,
     MAX_SVG_BODY_BYTES, MAX_WORLD_COORDINATE,
@@ -111,11 +111,13 @@ pub struct ToSvgOptions {
     /// stated not to plot. Default `false`. Either way they do not count
     /// towards the extent, and [`ToSvgResult::hidden`] counts them.
     pub include_hidden: bool,
-    /// The page the drawing is drawn on, and so the one color drawn as
-    /// its opposite -- see [`Paper`]. Default [`Paper::Light`]: no
-    /// background of its own, pure white drawn black. [`Paper::Dark`]
-    /// starts the document with a black rectangle covering its view and
-    /// draws pure black white.
+    /// The page the drawing is drawn on, and so the color drawn as its
+    /// opposite, and the colors drawn darker -- see [`Paper`]. Default
+    /// [`Paper::Light`]: no background of its own, pure white drawn black,
+    /// and a color with less than 3:1 contrast against white darkened to
+    /// 3:1 (see [`ToSvgResult::darkened`]). [`Paper::Dark`] starts the
+    /// document with a black rectangle covering its view and draws pure
+    /// black white.
     pub paper: Paper,
     /// Every stroke drawn this many CSS pixels wide on screen whatever the
     /// zoom, the way a CAD viewer draws lines: the document carries a style
@@ -216,6 +218,15 @@ pub struct ToSvgResult {
     /// viewport that shows it, and an entity on a layer frozen in that
     /// viewport alone counts too.
     pub hidden: usize,
+    /// How many times the render met an entity whose own color it darkened
+    /// for contrast: on a light page ([`Paper::Light`]) a color whose
+    /// contrast against white is below 3:1 -- yellow, cyan, light gray --
+    /// is drawn darker, its hue kept. Counted the way [`hidden`](Self::hidden)
+    /// is, per entity and per block reference that draws it; an entity that
+    /// takes its color from its block reference (BYBLOCK) is not counted
+    /// again, the reference's own color having been counted. Zero on a dark
+    /// page.
+    pub darkened: usize,
     /// For a layout's sheet ([`layout_to_svg`]): the viewports that are on
     /// and are windows onto the model, but whose view this renderer does
     /// not draw through them -- one the file does not state (a viewport
@@ -411,6 +422,9 @@ struct Ctx<'a> {
     /// Entities [`render_entity`] found hidden (see
     /// [`ToSvgResult::hidden`]).
     hidden: usize,
+    /// Entities whose own color was darkened for contrast (see
+    /// [`ToSvgResult::darkened`]).
+    darkened: usize,
     /// The reference IDs of the block references the walk is inside,
     /// outermost first -- on a sheet, after the viewport's own: what a
     /// text's path ([`TextBox::path`]) starts with.
@@ -467,6 +481,7 @@ impl<'a> Ctx<'a> {
             unsized_arrowheads: self.unsized_arrowheads.into_iter().collect(),
             limits: self.limits,
             hidden: self.hidden,
+            darkened: self.darkened,
             undrawn_viewports: Vec::new(),
             crop,
             viewports: Vec::new(),
@@ -509,6 +524,7 @@ impl<'a> Ctx<'a> {
             paper: Paper::Light,
             viewport_frozen: BTreeSet::new(),
             hidden: 0,
+            darkened: 0,
             id_path: Vec::new(),
             texts: Vec::new(),
             point_display: None,
@@ -1501,8 +1517,8 @@ fn mline_offset_points(vertices: &[MLineVertex], offset: f64) -> Vec<Point2D> {
         .collect()
 }
 
-fn resolve_entity_color(common: &EntityCommon, ctx: &Ctx) -> String {
-    resolve_color(
+fn resolve_entity_color(common: &EntityCommon, ctx: &mut Ctx) -> String {
+    let (color, darkened) = resolve_color_noted(
         common.color_index,
         common.true_color,
         // An absent or unresolved layer has no layer color to look up; the
@@ -1513,7 +1529,9 @@ fn resolve_entity_color(common: &EntityCommon, ctx: &Ctx) -> String {
         ctx.tables,
         &ctx.inherited_color,
         ctx.paper,
-    )
+    );
+    ctx.darkened += usize::from(darkened);
+    color
 }
 
 // --- entity rendering --------------------------------------------------
@@ -3447,6 +3465,7 @@ fn svg_result(scene: Scene, stroke_width: Option<f64>, screen_stroke: Option<f64
         limits: scene.limits,
         origin: scene.origin,
         hidden: scene.hidden,
+        darkened: scene.darkened,
         undrawn_viewports: scene.undrawn_viewports,
         view_box: scene.view_box,
         crop: scene.crop,

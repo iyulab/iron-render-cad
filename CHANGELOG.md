@@ -7,6 +7,25 @@ bumps the minor version.
 
 ## [Unreleased]
 
+### Changed
+
+- **Output change:** on a light paper (`Paper::Light`, the default), a pen color whose contrast against
+  white is below 3:1 (WCAG 2 relative luminance) is drawn darker, its hue kept, until it reaches 3:1, so
+  that it stays legible: ACI 2 yellow `#ffff00` is now `#9a9a00`, ACI 3 green `#00ff00` is `#00ad00`,
+  ACI 4 cyan `#00ffff` is `#00a5a5`, ACI 9 `#c0c0c0` is `#949494`. 63 of the ACI colors 1-255 are
+  affected; white is still drawn black, and colors that already have 3:1 -- red, blue, magenta, mid
+  grays -- are byte for byte what they were. Lines, text and fills (hatch solid and pattern fills,
+  gradient first stops) use the same corrected color. Applies to SVG and PNG alike, at every
+  color-producing path, and an overlay's automatic proposal color is chosen against the colors as drawn.
+  The judgement and the correction are integer arithmetic over a table of 8-bit sRGB levels, so the
+  drawn color is the same on every platform. `Paper::Dark` is unchanged. `Paper::ink` now does the darkening too; drawing an already drawn color
+  again still changes nothing.
+
+### Added
+
+- `ToSvgResult::darkened` and `ToPngResult::darkened` (and `Scene::darkened`): how many times the render
+  met an entity whose own color it darkened for contrast. Zero on a dark paper.
+
 ## [0.16.0] - 2026-11-05
 
 ### Changed

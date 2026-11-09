@@ -138,8 +138,9 @@ fn layer_zero_at_the_top_level_is_layer_zero() {
         },
     )
     .svg;
-    // Layer 0's own color, yellow, both at the top level and inside a
-    // reference that is itself on layer 0.
-    assert_eq!(stroke_at(&svg, 1.0), "#ffff00");
-    assert_eq!(stroke_at(&svg, 3.0), "#ffff00");
+    // Layer 0's own color, yellow (drawn darker on the white page to keep its
+    // contrast), both at the top level and inside a reference that is itself
+    // on layer 0.
+    assert_eq!(stroke_at(&svg, 1.0), "#9a9a00");
+    assert_eq!(stroke_at(&svg, 3.0), "#9a9a00");
 }

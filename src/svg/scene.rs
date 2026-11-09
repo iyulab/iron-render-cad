@@ -225,6 +225,7 @@ pub struct Scene {
     pub unsized_arrowheads: Vec<EntityId>,
     pub limits: LimitReport,
     pub hidden: usize,
+    pub darkened: usize,
     pub undrawn_viewports: Vec<EntityId>,
     pub crop: CropReport,
     pub viewports: Vec<ViewportReport>,

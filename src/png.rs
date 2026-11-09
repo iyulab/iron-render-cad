@@ -292,6 +292,8 @@ pub struct ToPngResult {
     pub limits: crate::limits::LimitReport,
     /// See [`ToSvgResult::hidden`](crate::ToSvgResult::hidden).
     pub hidden: usize,
+    /// See [`ToSvgResult::darkened`](crate::ToSvgResult::darkened).
+    pub darkened: usize,
     /// See
     /// [`ToSvgResult::undrawn_viewports`](crate::ToSvgResult::undrawn_viewports).
     pub undrawn_viewports: Vec<uncad_model::EntityId>,
@@ -430,6 +432,7 @@ fn png_result(scene: svg::Scene, options: &ToPngOptions) -> Result<ToPngResult, 
         unsized_arrowheads: scene.unsized_arrowheads,
         limits: scene.limits,
         hidden: scene.hidden,
+        darkened: scene.darkened,
         undrawn_viewports: scene.undrawn_viewports,
         crop: scene.crop,
         viewports: scene.viewports,

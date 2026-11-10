@@ -43,6 +43,7 @@ fn insert(id: u64, block: &str, at: (f64, f64), attribs: Vec<AttribEntity>) -> E
             y: 0.0,
             z: 1.0,
         },
+        array: None,
     })
 }
 

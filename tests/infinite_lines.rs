@@ -172,6 +172,7 @@ fn an_xline_inside_a_placed_block_is_cut_in_the_documents_frame() {
             y: 0.0,
             z: 1.0,
         },
+        array: None,
     }));
     let result = to_svg(&db(entities, blocks), all());
 

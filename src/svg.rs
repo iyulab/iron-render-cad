@@ -3529,6 +3529,7 @@ mod tests {
                         y: 0.0,
                         z: 1.0,
                     },
+                    array: None,
                 })
             })
             .collect();
@@ -3568,6 +3569,7 @@ mod tests {
                 y: 0.0,
                 z: 1.0,
             },
+            array: None,
         });
         let svg = render_block_ref(
             &owner,
@@ -4106,6 +4108,7 @@ mod tests {
                 rotation: 0.0,
                 attribs: Vec::new(),
                 extrusion: mirrored(),
+                array: None,
             })],
             tables: Tables {
                 block_records,
@@ -5085,6 +5088,7 @@ mod tests {
                 rotation: 0.0,
                 attribs: Vec::new(),
                 extrusion: normal,
+                array: None,
             };
             let model = insert
                 .world_transform(Point3D::default())

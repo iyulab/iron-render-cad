@@ -86,6 +86,7 @@ fn insert(id: u64, block: &str, at: (f64, f64), scale: f64) -> Entity {
         rotation: 0.0,
         attribs: Vec::new(),
         extrusion: z(),
+        array: None,
     })
 }
 

@@ -209,6 +209,7 @@ fn a_circle_in_a_rotated_block_counts_all_of_itself() {
             y: 0.0,
             z: 1.0,
         },
+        array: None,
     });
     let [min_x, min_y, max_x, max_y] = extent(vec![insert], blocks);
     // The turned box is a diamond reaching sqrt 2 from the centre: it
@@ -289,6 +290,7 @@ fn a_bulged_polyline_in_a_rotated_block_counts_all_of_its_arc() {
         rotation: FRAC_PI_4,
         attribs: Vec::new(),
         extrusion: xyz(0.0, 0.0, 1.0),
+        array: None,
     });
     let [min_x, min_y, max_x, max_y] = extent(vec![insert], blocks);
     let h = std::f64::consts::FRAC_1_SQRT_2;

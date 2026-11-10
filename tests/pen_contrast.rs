@@ -181,6 +181,7 @@ fn a_block_reference_and_what_it_passes_down_are_darkened_once() {
             y: 0.0,
             z: 1.0,
         },
+        array: None,
     });
     // A BYBLOCK line inside the block takes the reference's drawn color.
     let mut block_records = BTreeMap::new();

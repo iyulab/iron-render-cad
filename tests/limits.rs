@@ -66,6 +66,7 @@ fn insert(id: u64, block: &str, x: f64) -> Entity {
             y: 0.0,
             z: 1.0,
         },
+        array: None,
     })
 }
 

@@ -108,6 +108,7 @@ fn far_drawing() -> CadDatabase {
                     y: 0.0,
                     z: 1.0,
                 },
+                array: None,
             }),
             Entity::Dimension(DimensionEntity {
                 common: common(0x12),

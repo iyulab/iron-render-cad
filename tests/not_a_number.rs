@@ -102,6 +102,7 @@ fn a_non_finite_coordinate_never_reaches_an_svg_attribute() {
                     y: 0.0,
                     z: 1.0,
                 },
+                array: None,
             }),
         ],
         tables: Tables {

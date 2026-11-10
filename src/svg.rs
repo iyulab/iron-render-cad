@@ -2676,13 +2676,9 @@ fn draw_insert(
         .map_or_else(Point3D::default, |block| block.base_point);
     // A grid (a multiple insert) places the block once in each of its cells,
     // moved by the cell's offset in the reference's own plane.
-    let cells: Box<dyn Iterator<Item = (u32, u32)>> = match &i.array {
-        Some(grid) => Box::new(grid.cells()),
-        None => Box::new(std::iter::once((0, 0))),
-    };
     let mut svg = String::new();
     let mut any = false;
-    for (column, row) in cells {
+    for (column, row) in i.cells() {
         any = true;
         let placement = i.world_transform_at(base, column, row).unwrap_or_else(|| {
             let mut own = i.transform(base);

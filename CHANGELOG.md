@@ -9,6 +9,13 @@ bumps the minor version.
 
 ### Changed
 
+- **Output change:** a block reference with a grid (a multiple insert, `InsertEntity::array`) draws its
+  block in every cell, the spacing turned with the reference and not scaled by it; it drew the first
+  placement only. The picture and its extent grow to hold the cells. A reference stopped by the nesting
+  or expansion caps stops its remaining cells with it and is reported once; a grid with no cell draws
+  nothing and is named `INSERT_EMPTY_GRID` in `unsupported_types`, and one whose spacing is not a number
+  is not drawn. Needs the `uncad-model` release that adds `InsertEntity::array`.
+
 - **Output change:** on a light paper (`Paper::Light`, the default), a pen color whose contrast against
   white is below 3:1 (WCAG 2 relative luminance) is drawn darker, its hue kept, until it reaches 3:1, so
   that it stays legible: ACI 2 yellow `#ffff00` is now `#9a9a00`, ACI 3 green `#00ff00` is `#00ad00`,

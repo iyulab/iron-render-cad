@@ -1909,6 +1909,8 @@ fn numbers_are_real(e: &Entity) -> bool {
             p3(&i.insertion_point)
                 && real(&[i.scale.x, i.scale.y, i.rotation])
                 && plane_numbers_are_real(&i.extrusion, i.insertion_point.z)
+                && i.array
+                    .is_none_or(|a| real(&[a.column_spacing, a.row_spacing]))
         }
         Entity::AcadTable(a) => p3(&a.insertion_point) && real(&[a.scale.x, a.scale.y, a.rotation]),
         Entity::Viewport(v) => p3(&v.center) && real(&[v.width, v.height]),
@@ -2672,13 +2674,39 @@ fn draw_insert(
         .resolved()
         .and_then(|name| ctx.tables.block_records.get(name))
         .map_or_else(Point3D::default, |block| block.base_point);
-    let placement = i.world_transform(base).unwrap_or_else(|| {
-        i.transform(base).then(&plane_seen_from_above(
-            own_plane(i.extrusion),
-            i.insertion_point.z,
-        ))
-    });
-    Some(render_block_ref(e, &i.block_name, placement, color, ctx))
+    // A grid (a multiple insert) places the block once in each of its cells,
+    // moved by the cell's offset in the reference's own plane.
+    let cells: Box<dyn Iterator<Item = (u32, u32)>> = match &i.array {
+        Some(grid) => Box::new(grid.cells()),
+        None => Box::new(std::iter::once((0, 0))),
+    };
+    let mut svg = String::new();
+    let mut any = false;
+    for (column, row) in cells {
+        any = true;
+        let placement = i.world_transform_at(base, column, row).unwrap_or_else(|| {
+            let mut own = i.transform(base);
+            let offset = i.cell_offset(column, row);
+            own.e += offset.x;
+            own.f += offset.y;
+            own.then(&plane_seen_from_above(
+                own_plane(i.extrusion),
+                i.insertion_point.z,
+            ))
+        });
+        // Once the caps stop a reference, the rest of its cells stop with
+        // it: the call that was stopped has said so, under the reference.
+        let stopped = ctx.depth > MAX_BLOCK_REF_DEPTH || ctx.block_ref_budget == 0;
+        svg.push_str(&render_block_ref(e, &i.block_name, placement, color, ctx));
+        if stopped {
+            break;
+        }
+    }
+    if !any {
+        ctx.unsupported.insert("INSERT_EMPTY_GRID".to_string());
+        return None;
+    }
+    Some(svg)
 }
 
 /// A table's block is placed as though based at the origin: the
